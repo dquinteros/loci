@@ -1,0 +1,22 @@
+from __future__ import annotations
+
+from .. import store
+from ..chunker import chunk
+
+
+def ingest(url: str, project: str = "") -> int:
+    import trafilatura
+
+    downloaded = trafilatura.fetch_url(url)
+    if not downloaded:
+        raise ValueError(f"Could not fetch {url}")
+    text = trafilatura.extract(downloaded)
+    if not text:
+        raise ValueError(f"Could not extract text from {url}")
+    chunks = chunk(text)
+    count = 0
+    for idx, c in enumerate(chunks):
+        if store.insert(c, tags=["web"], project=project, source="web",
+                        source_ref=url, chunk_idx=idx):
+            count += 1
+    return count
