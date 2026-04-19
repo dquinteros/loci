@@ -49,11 +49,15 @@ def add_doc(target: str, tag: tuple[str, ...]) -> None:
         elif suffix in {".md", ".txt"}:
             from .chunker import chunk
             text = path.read_text(errors="replace")
-            count = 0
-            for idx, c in enumerate(chunk(text)):
-                if store.insert(c, tags=list(tag) or ["doc"], project=project,
-                                source="file", source_ref=str(path), chunk_idx=idx):
-                    count += 1
+            chunks_input = [
+                store.ChunkInput(
+                    content=c, tags=list(tag) or ["doc"], project=project,
+                    source="file", source_ref=str(path), chunk_idx=idx,
+                )
+                for idx, c in enumerate(chunk(text))
+            ]
+            results = store.insert_batch(chunks_input)
+            count = sum(1 for r in results if r is not None)
         else:
             click.echo(f"Unsupported file type: {suffix}", err=True)
             sys.exit(1)
@@ -134,19 +138,19 @@ def import_cmd(db_path: str) -> None:
     rows = src_con.execute("SELECT * FROM memories").fetchall()
     src_con.close()
 
-    count = 0
-    for row in rows:
-        tags = json.loads(row["tags"] or "[]")
-        mem_id = store.insert(
-            row["content"],
-            tags=tags,
+    chunks_input = [
+        store.ChunkInput(
+            content=row["content"],
+            tags=json.loads(row["tags"] or "[]"),
             project=row["project"] or "",
             source=row["source"] or "manual",
             source_ref=row["source_ref"] or "",
             chunk_idx=row["chunk_idx"] or 0,
         )
-        if mem_id:
-            count += 1
+        for row in rows
+    ]
+    results = store.insert_batch(chunks_input)
+    count = sum(1 for r in results if r is not None)
     click.echo(f"imported {count} memories (duplicates skipped)")
 
 

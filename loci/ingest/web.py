@@ -13,10 +13,13 @@ def ingest(url: str, project: str = "") -> int:
     text = trafilatura.extract(downloaded)
     if not text:
         raise ValueError(f"Could not extract text from {url}")
-    chunks = chunk(text)
-    count = 0
-    for idx, c in enumerate(chunks):
-        if store.insert(c, tags=["web"], project=project, source="web",
-                        source_ref=url, chunk_idx=idx):
-            count += 1
-    return count
+    chunks_text = chunk(text)
+    chunks_input = [
+        store.ChunkInput(
+            content=c, tags=["web"], project=project,
+            source="web", source_ref=url, chunk_idx=idx,
+        )
+        for idx, c in enumerate(chunks_text)
+    ]
+    results = store.insert_batch(chunks_input)
+    return sum(1 for r in results if r is not None)

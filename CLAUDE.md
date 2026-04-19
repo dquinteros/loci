@@ -87,7 +87,7 @@ User/Claude Code
 
 | Module | Responsibility |
 |--------|---------------|
-| `loci/store.py` | SQLite schema, CRUD, FTS5 index, sqlite-vec vector index, deduplication |
+| `loci/store.py` | SQLite schema, CRUD, FTS5 index, sqlite-vec vector index, deduplication, batch insert, thread-local connection pool |
 | `loci/embedder.py` | Wraps FastEmbed (`BAAI/bge-small-en-v1.5`, 384-dim) — singleton model |
 | `loci/chunker.py` | Recursive character text splitter (default 1024 chars, code uses 2048) |
 | `loci/refs.py` | Cross-project reference graph: CRUD + BFS resolver for multi-project search |
@@ -124,7 +124,9 @@ MCP tools: `add_ref`, `remove_ref`, `list_refs`, `index_ref`.
 
 ### Key Design Decisions
 
-- **Deduplication threshold:** cosine similarity ≥ 0.95 skips storing duplicate chunks (`store.py`)
+- **Thread-local connection pool:** `store._connect()` caches one SQLite connection per thread in `threading.local()`, eliminating per-call `sqlite-vec` extension loading overhead (~6.6ms each). Thread-local (not a plain global) because `watchdog` observer threads call store functions concurrently. An `atexit` handler closes connections on exit.
+- **Batch insert:** `store.insert_batch()` accepts a list of `ChunkInput` and: (1) embeds all texts in one `embed()` call, (2) fetches all existing vectors and computes a similarity matrix for dedup (falls back to per-chunk ANN if >100K existing vectors), (3) performs intra-batch dedup, (4) inserts all non-duplicate chunks in a single transaction. All ingest callers (`code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py`, `cli.py import`) use `insert_batch()`. The original `insert()` is kept for single-item callers (MCP `remember`, CLI `add`, hooks).
+- **Deduplication threshold:** cosine similarity ≥ 0.95 skips storing duplicate chunks (`store.py`). The dedup metric is `1 - L2_distance` (not raw cosine), matching `vector_search()` scoring.
 - **Project scoping:** memories are keyed to the git repo root (or CWD), so `recall` only returns relevant project context by default. Cross-project references extend this to include referenced projects with a 0.7× RRF weight penalty.
 - **Hybrid retrieval:** RRF merges vector and keyword rankings using `1/(rank+60)` — neither alone is used; both contribute
 - **Embedding model is a singleton:** loaded once in `embedder.py`, shared across the process to avoid reload overhead

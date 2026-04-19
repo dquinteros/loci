@@ -11,10 +11,13 @@ def ingest(path: str | Path, project: str = "") -> int:
     path = Path(path)
     doc = docx.Document(str(path))
     text = "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    chunks = chunk(text)
-    count = 0
-    for idx, c in enumerate(chunks):
-        if store.insert(c, tags=["docx"], project=project, source="file",
-                        source_ref=str(path), chunk_idx=idx):
-            count += 1
-    return count
+    chunks_text = chunk(text)
+    chunks_input = [
+        store.ChunkInput(
+            content=c, tags=["docx"], project=project,
+            source="file", source_ref=str(path), chunk_idx=idx,
+        )
+        for idx, c in enumerate(chunks_text)
+    ]
+    results = store.insert_batch(chunks_input)
+    return sum(1 for r in results if r is not None)

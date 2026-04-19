@@ -19,22 +19,33 @@ def _is_ignored(path: Path, spec: pathspec.PathSpec, cwd: Path) -> bool:
     return spec.match_file(rel)
 
 
-def ingest_file(path: str | Path, project: str = "") -> int:
-    path = Path(path)
+def collect_file_chunks(path: Path, project: str = "") -> list[store.ChunkInput]:
     if path.suffix not in config.CODE_EXTENSIONS:
-        return 0
+        return []
     try:
         text = path.read_text(errors="replace")
     except OSError:
-        return 0
+        return []
     chunks = chunk(text, size=2048)
-    count = 0
-    for idx, c in enumerate(chunks):
-        if store.insert(c, tags=["code", path.suffix.lstrip(".")],
-                        project=project, source="code",
-                        source_ref=str(path), chunk_idx=idx):
-            count += 1
-    return count
+    return [
+        store.ChunkInput(
+            content=c,
+            tags=["code", path.suffix.lstrip(".")],
+            project=project,
+            source="code",
+            source_ref=str(path),
+            chunk_idx=idx,
+        )
+        for idx, c in enumerate(chunks)
+    ]
+
+
+def ingest_file(path: str | Path, project: str = "") -> int:
+    chunks = collect_file_chunks(Path(path), project)
+    if not chunks:
+        return 0
+    results = store.insert_batch(chunks)
+    return sum(1 for r in results if r is not None)
 
 
 def ingest_codebase(
@@ -44,7 +55,8 @@ def ingest_codebase(
 ) -> tuple[int, int]:
     cwd = Path(cwd)
     spec = _load_gitignore(cwd)
-    total = 0
+    all_chunks: list[store.ChunkInput] = []
+    files_to_clean: list[str] = []
     skipped = 0
 
     for dirpath, dirnames, filenames in os.walk(cwd, topdown=True):
@@ -67,14 +79,17 @@ def ingest_codebase(
                 if last is not None and path.stat().st_mtime <= last:
                     skipped += 1
                     continue
-                if last is not None:
-                    store.mark_stale(str(path))
-                total += ingest_file(path, project=project)
-                if last is not None:
-                    store.delete_stale(str(path))
-            else:
-                store.mark_stale(str(path))
-                total += ingest_file(path, project=project)
-                store.delete_stale(str(path))
+
+            store.mark_stale(str(path))
+            all_chunks.extend(collect_file_chunks(path, project))
+            files_to_clean.append(str(path))
+
+    total = 0
+    if all_chunks:
+        results = store.insert_batch(all_chunks)
+        total = sum(1 for r in results if r is not None)
+
+    for ref in files_to_clean:
+        store.delete_stale(ref)
 
     return total, skipped

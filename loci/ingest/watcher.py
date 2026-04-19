@@ -21,10 +21,15 @@ def _ingest_doc(path: Path, project: str = "") -> None:
             docx_ingest.ingest(path, project=project)
         elif suffix in {".md", ".txt"}:
             text = path.read_text(errors="replace")
-            for idx, c in enumerate(chunk(text)):
-                store.insert(c, tags=["doc", suffix.lstrip(".")],
-                             project=project, source="file",
-                             source_ref=str(path), chunk_idx=idx)
+            chunks_input = [
+                store.ChunkInput(
+                    content=c, tags=["doc", suffix.lstrip(".")],
+                    project=project, source="file",
+                    source_ref=str(path), chunk_idx=idx,
+                )
+                for idx, c in enumerate(chunk(text))
+            ]
+            store.insert_batch(chunks_input)
     except Exception as exc:
         print(f"[loci] watcher ingest error {path}: {exc}")
 

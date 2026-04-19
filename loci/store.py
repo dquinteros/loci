@@ -1,6 +1,8 @@
 from __future__ import annotations
+import atexit
 import json
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -30,7 +32,23 @@ class Memory:
         return d
 
 
+@dataclass(frozen=True)
+class ChunkInput:
+    content: str
+    tags: list[str]
+    project: str
+    source: str
+    source_ref: str
+    chunk_idx: int
+
+
+_local = threading.local()
+
+
 def _connect() -> sqlite3.Connection:
+    con = getattr(_local, "con", None)
+    if con is not None:
+        return con
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(config.DB_PATH)
     con.row_factory = sqlite3.Row
@@ -49,7 +67,18 @@ def _connect() -> sqlite3.Connection:
         ) from None
     sqlite_vec.load(con)
     con.enable_load_extension(False)
+    _local.con = con
     return con
+
+
+def close() -> None:
+    con = getattr(_local, "con", None)
+    if con is not None:
+        con.close()
+        _local.con = None
+
+
+atexit.register(close)
 
 
 def init_db() -> None:
@@ -95,14 +124,6 @@ def init_db() -> None:
         );
     """)
     con.commit()
-    con.close()
-
-
-def _cosine(a: np.ndarray, b: np.ndarray) -> float:
-    na, nb = np.linalg.norm(a), np.linalg.norm(b)
-    if na == 0 or nb == 0:
-        return 0.0
-    return float(np.dot(a, b) / (na * nb))
 
 
 def insert(
@@ -118,7 +139,6 @@ def insert(
     tags = tags or []
     emb = embed([content])[0]
 
-    # dedup check
     hits = vector_search(emb, k=1, project=None)
     if hits:
         top_id, top_score = hits[0]
@@ -130,70 +150,133 @@ def insert(
     emb_bytes = emb.astype(np.float32).tobytes()
 
     con = _connect()
-    try:
-        row = con.execute("SELECT MAX(rowid) FROM memories").fetchone()
-        next_rowid = (row[0] or 0) + 1
+    row = con.execute("SELECT MAX(rowid) FROM memories").fetchone()
+    next_rowid = (row[0] or 0) + 1
+    con.execute(
+        "INSERT INTO memories(id, content, tags, project, source, source_ref, chunk_idx, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (memory_id, content, tags_json, project, source, source_ref, chunk_idx, time()),
+    )
+    con.execute(
+        "INSERT INTO memories_vec(rowid, embedding) VALUES (?,?)",
+        (next_rowid, emb_bytes),
+    )
+    con.commit()
+    return memory_id
+
+
+def insert_batch(chunks: list[ChunkInput]) -> list[str | None]:
+    if not chunks:
+        return []
+
+    from .embedder import embed
+
+    texts = [c.content for c in chunks]
+    embeddings = embed(texts)
+
+    con = _connect()
+
+    existing_rows = con.execute(
+        "SELECT rowid, embedding FROM memories_vec"
+    ).fetchall()
+
+    is_dup = np.zeros(len(chunks), dtype=bool)
+
+    if existing_rows:
+        n_existing = len(existing_rows)
+        if n_existing > 100_000:
+            for i, emb in enumerate(embeddings):
+                hits = vector_search(emb, k=1, project=None)
+                if hits and hits[0][1] >= config.DEDUP_COS:
+                    is_dup[i] = True
+        else:
+            existing_embs = np.stack([
+                np.frombuffer(r["embedding"], dtype=np.float32)
+                for r in existing_rows
+            ])
+            cos_sims = embeddings @ existing_embs.T
+            l2_dists = np.sqrt(np.maximum(0.0, 2.0 - 2.0 * cos_sims))
+            scores = 1.0 - l2_dists
+            max_scores = scores.max(axis=1)
+            is_dup = max_scores >= config.DEDUP_COS
+
+    # intra-batch dedup
+    for i in range(len(chunks)):
+        if is_dup[i]:
+            continue
+        for j in range(i + 1, len(chunks)):
+            if is_dup[j]:
+                continue
+            cos_sim = float(embeddings[i] @ embeddings[j])
+            l2_dist = (max(0.0, 2.0 - 2.0 * cos_sim)) ** 0.5
+            if (1.0 - l2_dist) >= config.DEDUP_COS:
+                is_dup[j] = True
+
+    results: list[str | None] = []
+    now = time()
+    row = con.execute("SELECT MAX(rowid) FROM memories").fetchone()
+    next_rowid = (row[0] or 0) + 1
+
+    for i, chunk_input in enumerate(chunks):
+        if is_dup[i]:
+            results.append(None)
+            continue
+
+        memory_id = str(uuid.uuid4())
+        tags_json = json.dumps(chunk_input.tags)
+        emb_bytes = embeddings[i].astype(np.float32).tobytes()
+
         con.execute(
             "INSERT INTO memories(id, content, tags, project, source, source_ref, chunk_idx, created_at)"
             " VALUES (?,?,?,?,?,?,?,?)",
-            (memory_id, content, tags_json, project, source, source_ref, chunk_idx, time()),
+            (memory_id, chunk_input.content, tags_json, chunk_input.project,
+             chunk_input.source, chunk_input.source_ref, chunk_input.chunk_idx, now),
         )
         con.execute(
             "INSERT INTO memories_vec(rowid, embedding) VALUES (?,?)",
             (next_rowid, emb_bytes),
         )
-        con.commit()
-    finally:
-        con.close()
-    return memory_id
+        next_rowid += 1
+        results.append(memory_id)
+
+    con.commit()
+    return results
 
 
 def delete(memory_id: str) -> None:
     con = _connect()
-    try:
-        row = con.execute("SELECT rowid FROM memories WHERE id=?", (memory_id,)).fetchone()
-        if row:
-            rowid = row[0]
-            con.execute("DELETE FROM memories WHERE id=?", (memory_id,))
-            con.execute("DELETE FROM memories_vec WHERE rowid=?", (rowid,))
-            con.commit()
-    finally:
-        con.close()
+    row = con.execute("SELECT rowid FROM memories WHERE id=?", (memory_id,)).fetchone()
+    if row:
+        rowid = row[0]
+        con.execute("DELETE FROM memories WHERE id=?", (memory_id,))
+        con.execute("DELETE FROM memories_vec WHERE rowid=?", (rowid,))
+        con.commit()
 
 
 def mark_stale(source_ref: str) -> None:
     con = _connect()
-    try:
-        con.execute("UPDATE memories SET is_stale=1 WHERE source_ref=?", (source_ref,))
-        con.commit()
-    finally:
-        con.close()
+    con.execute("UPDATE memories SET is_stale=1 WHERE source_ref=?", (source_ref,))
+    con.commit()
 
 
 def delete_stale(source_ref: str) -> None:
     con = _connect()
-    try:
-        rows = con.execute(
-            "SELECT id, rowid FROM memories WHERE source_ref=? AND is_stale=1", (source_ref,)
-        ).fetchall()
-        for row in rows:
-            con.execute("DELETE FROM memories WHERE id=?", (row["id"],))
-            con.execute("DELETE FROM memories_vec WHERE rowid=?", (row["rowid"],))
-        con.commit()
-    finally:
-        con.close()
+    rows = con.execute(
+        "SELECT id, rowid FROM memories WHERE source_ref=? AND is_stale=1", (source_ref,)
+    ).fetchall()
+    for row in rows:
+        con.execute("DELETE FROM memories WHERE id=?", (row["id"],))
+        con.execute("DELETE FROM memories_vec WHERE rowid=?", (row["rowid"],))
+    con.commit()
 
 
 def last_indexed(source_ref: str) -> float | None:
     con = _connect()
-    try:
-        row = con.execute(
-            "SELECT MAX(created_at) FROM memories WHERE source_ref = ?",
-            (source_ref,),
-        ).fetchone()
-        return row[0] if row and row[0] is not None else None
-    finally:
-        con.close()
+    row = con.execute(
+        "SELECT MAX(created_at) FROM memories WHERE source_ref = ?",
+        (source_ref,),
+    ).fetchone()
+    return row[0] if row and row[0] is not None else None
 
 
 def vector_search(
@@ -205,31 +288,28 @@ def vector_search(
     allowed = set(projects) if projects else ({project} if project else None)
     emb_bytes = emb.astype(np.float32).tobytes()
     con = _connect()
-    try:
-        rows = con.execute(
-            "SELECT rowid, distance FROM memories_vec WHERE embedding MATCH ? AND k=?",
-            (emb_bytes, k * 3 if allowed else k),
-        ).fetchall()
-        if not rows:
-            return []
-        rowids = [r["rowid"] for r in rows]
-        dist_map = {r["rowid"]: r["distance"] for r in rows}
+    rows = con.execute(
+        "SELECT rowid, distance FROM memories_vec WHERE embedding MATCH ? AND k=?",
+        (emb_bytes, k * 3 if allowed else k),
+    ).fetchall()
+    if not rows:
+        return []
+    rowids = [r["rowid"] for r in rows]
+    dist_map = {r["rowid"]: r["distance"] for r in rows}
 
-        placeholders = ",".join("?" * len(rowids))
-        query = f"SELECT id, rowid, project FROM memories WHERE rowid IN ({placeholders})"
-        mem_rows = con.execute(query, rowids).fetchall()
+    placeholders = ",".join("?" * len(rowids))
+    query = f"SELECT id, rowid, project FROM memories WHERE rowid IN ({placeholders})"
+    mem_rows = con.execute(query, rowids).fetchall()
 
-        results = []
-        for mr in mem_rows:
-            if allowed and mr["project"] not in allowed:
-                continue
-            dist = dist_map[mr["rowid"]]
-            score = max(0.0, 1.0 - dist)
-            results.append((mr["id"], score))
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:k]
-    finally:
-        con.close()
+    results = []
+    for mr in mem_rows:
+        if allowed and mr["project"] not in allowed:
+            continue
+        dist = dist_map[mr["rowid"]]
+        score = max(0.0, 1.0 - dist)
+        results.append((mr["id"], score))
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[:k]
 
 
 def fts_search(
@@ -240,75 +320,35 @@ def fts_search(
 ) -> list[tuple[str, float]]:
     allowed = set(projects) if projects else ({project} if project else None)
     con = _connect()
-    try:
-        rows = con.execute(
-            "SELECT m.id, m.project, rank FROM memories_fts f"
-            " JOIN memories m ON m.rowid = f.rowid"
-            " WHERE memories_fts MATCH ?"
-            " ORDER BY rank LIMIT ?",
-            (query, k * 3 if allowed else k),
-        ).fetchall()
-        results = []
-        for row in rows:
-            if allowed and row["project"] not in allowed:
-                continue
-            results.append((row["id"], -row["rank"]))
-        return results[:k]
-    finally:
-        con.close()
+    rows = con.execute(
+        "SELECT m.id, m.project, rank FROM memories_fts f"
+        " JOIN memories m ON m.rowid = f.rowid"
+        " WHERE memories_fts MATCH ?"
+        " ORDER BY rank LIMIT ?",
+        (query, k * 3 if allowed else k),
+    ).fetchall()
+    results = []
+    for row in rows:
+        if allowed and row["project"] not in allowed:
+            continue
+        results.append((row["id"], -row["rank"]))
+    return results[:k]
 
 
 def get_by_ids(ids: list[str]) -> list[Memory]:
     if not ids:
         return []
     con = _connect()
-    try:
-        placeholders = ",".join("?" * len(ids))
-        rows = con.execute(
-            f"SELECT * FROM memories WHERE id IN ({placeholders})", ids
-        ).fetchall()
-        by_id = {r["id"]: r for r in rows}
-        result = []
-        for memory_id in ids:
-            if memory_id in by_id:
-                r = by_id[memory_id]
-                result.append(Memory(
-                    id=r["id"],
-                    content=r["content"],
-                    tags=json.loads(r["tags"] or "[]"),
-                    project=r["project"] or "",
-                    source=r["source"] or "",
-                    source_ref=r["source_ref"] or "",
-                    chunk_idx=r["chunk_idx"] or 0,
-                    created_at=r["created_at"] or 0.0,
-                    is_stale=r["is_stale"] or 0,
-                ))
-        return result
-    finally:
-        con.close()
-
-
-def list_memories(
-    project: str = "", tag: str = "", limit: int = 20
-) -> list[Memory]:
-    con = _connect()
-    try:
-        conditions = ["1=1"]
-        params: list = []
-        if project:
-            conditions.append("project=?")
-            params.append(project)
-        if tag:
-            conditions.append("tags LIKE ?")
-            params.append(f'%"{tag}"%')
-        params.append(limit)
-        rows = con.execute(
-            f"SELECT * FROM memories WHERE {' AND '.join(conditions)}"
-            " ORDER BY created_at DESC LIMIT ?",
-            params,
-        ).fetchall()
-        return [
-            Memory(
+    placeholders = ",".join("?" * len(ids))
+    rows = con.execute(
+        f"SELECT * FROM memories WHERE id IN ({placeholders})", ids
+    ).fetchall()
+    by_id = {r["id"]: r for r in rows}
+    result = []
+    for memory_id in ids:
+        if memory_id in by_id:
+            r = by_id[memory_id]
+            result.append(Memory(
                 id=r["id"],
                 content=r["content"],
                 tags=json.loads(r["tags"] or "[]"),
@@ -318,8 +358,39 @@ def list_memories(
                 chunk_idx=r["chunk_idx"] or 0,
                 created_at=r["created_at"] or 0.0,
                 is_stale=r["is_stale"] or 0,
-            )
-            for r in rows
-        ]
-    finally:
-        con.close()
+            ))
+    return result
+
+
+def list_memories(
+    project: str = "", tag: str = "", limit: int = 20
+) -> list[Memory]:
+    con = _connect()
+    conditions = ["1=1"]
+    params: list = []
+    if project:
+        conditions.append("project=?")
+        params.append(project)
+    if tag:
+        conditions.append("tags LIKE ?")
+        params.append(f'%"{tag}"%')
+    params.append(limit)
+    rows = con.execute(
+        f"SELECT * FROM memories WHERE {' AND '.join(conditions)}"
+        " ORDER BY created_at DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [
+        Memory(
+            id=r["id"],
+            content=r["content"],
+            tags=json.loads(r["tags"] or "[]"),
+            project=r["project"] or "",
+            source=r["source"] or "",
+            source_ref=r["source_ref"] or "",
+            chunk_idx=r["chunk_idx"] or 0,
+            created_at=r["created_at"] or 0.0,
+            is_stale=r["is_stale"] or 0,
+        )
+        for r in rows
+    ]
