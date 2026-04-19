@@ -25,7 +25,6 @@ Memory lives in a local SQLite database (`~/.loci/memories.db`) and never leaves
 
 ## Requirements
 
-- Python 3.10+
 - [Claude Code](https://claude.ai/code) CLI installed
 
 ---
@@ -33,16 +32,12 @@ Memory lives in a local SQLite database (`~/.loci/memories.db`) and never leaves
 ## Installation
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/yourname/loci
-cd loci
-pip install -e .
-
-# 2. Register the MCP server and hooks with Claude Code
-loci install
+curl -sSL https://raw.githubusercontent.com/dquinteros/loci/master/install.sh | bash
 ```
 
-> **Using pyenv?** The repo includes a `.python-version` file pinned to `3.10.0`. If `pip` isn't found after cloning, run `pyenv install 3.10.0` once and then retry.
+The script detects Python 3.10+, installs it via pyenv if missing, then registers loci as an MCP server and hooks with Claude Code.
+
+Restart Claude Code after installing.
 
 `loci install` writes to `~/.claude/settings.json` — it registers:
 - An MCP server (`loci serve`) so Claude can call memory tools directly
