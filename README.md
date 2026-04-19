@@ -42,6 +42,8 @@ pip install -e .
 loci install
 ```
 
+> **Using pyenv?** The repo includes a `.python-version` file pinned to `3.10.0`. If `pip` isn't found after cloning, run `pyenv install 3.10.0` once and then retry.
+
 `loci install` writes to `~/.claude/settings.json` — it registers:
 - An MCP server (`loci serve`) so Claude can call memory tools directly
 - Three hooks: `SessionStart`, `PostToolUse`, and `Stop`
