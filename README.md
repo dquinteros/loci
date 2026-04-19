@@ -131,6 +131,35 @@ loci watch
 
 Drop PDFs, docs, or markdown into `~/loci-docs/` and loci picks them up automatically.
 
+### Cross-project references
+
+Link related projects so memories from one are surfaced when working in another:
+
+```bash
+# Declare a reference to another project
+loci ref add ../shared-lib
+
+# Index the referenced project's codebase (also adds the ref if missing)
+loci index-ref ../shared-lib
+loci index-ref ../shared-lib --force   # full reindex
+
+# List all references from the current project
+loci ref list
+
+# Remove a reference
+loci ref remove ../shared-lib
+```
+
+Once a reference exists, `loci search` and Claude's `recall` automatically include memories from referenced projects (weighted slightly lower so local results rank first). References are traversed up to 2 hops deep — if project A references B and B references C, searching in A also surfaces C's memories.
+
+### Uninstall
+
+```bash
+loci uninstall
+```
+
+Removes the loci MCP server from `~/.claude.json` and all loci hooks from `~/.claude/settings.json`. Other MCP servers and hooks are left untouched.
+
 ### Export and import
 
 ```bash
@@ -157,6 +186,10 @@ When Claude Code is connected via MCP, these tools are available in any conversa
 | `forget(id)` | Delete a memory by ID |
 | `list_memories(tag, limit)` | List project memories, optionally filtered by tag |
 | `index_codebase(force)` | Index (or incrementally update) the current project codebase |
+| `add_ref(path)` | Add a cross-project reference |
+| `remove_ref(path)` | Remove a cross-project reference |
+| `list_refs()` | List all references from the current project |
+| `index_ref(path, force)` | Index a referenced project's codebase |
 
 Claude uses `recall` and `remember` automatically — you don't need to ask it to. You can also ask Claude to run `index_codebase` mid-session to pick up new files without leaving the conversation.
 
