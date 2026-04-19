@@ -96,7 +96,7 @@ main() {
   fi
 
   bold "Installing loci from GitHub..."
-  "$PYTHON" -m pip install --quiet "git+${REPO}.git"
+  "$PYTHON" -m pip install --quiet --no-cache-dir --force-reinstall "git+${REPO}.git"
 
   bold "Registering loci with Claude Code..."
   loci install
