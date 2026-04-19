@@ -59,7 +59,7 @@ User/Claude Code
       │                                              ↓
       ├─ CLI commands (loci add/search/index) ──► cli.py
       │                                              ↓
-      └─ Claude Code hooks ──────────────────────► hooks/
+      └─ Claude Code hooks ──────────────────────► loci/hooks/
                                                      ↓
                                               retriever.py / store.py
                                                      ↓
@@ -77,14 +77,15 @@ User/Claude Code
 | `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase` tools |
 | `loci/config.py` | All constants (paths, thresholds, model name, extensions) |
 | `loci/ingest/` | Source-specific ingestion: `code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py` |
+| `loci/hooks/` | Hook scripts bundled inside the package; `loci install` copies them to `~/.loci/hooks/` |
 
 ### Hooks (Claude Code Integration)
 
-`loci install` copies hook scripts to `~/.loci/hooks/` and registers them in `~/.claude/settings.json`:
+`loci install` copies hook scripts from the installed package (`loci/hooks/`) to `~/.loci/hooks/` and registers them in `~/.claude/settings.json`:
 
-- `hooks/session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin
-- `hooks/post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory
-- `hooks/session_stop.py` — reads `LOCI_SESSION_SUMMARY` env var or stdin; saves each line (>20 chars) as a "session"-tagged memory
+- `loci/hooks/session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin
+- `loci/hooks/post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory
+- `loci/hooks/session_stop.py` — reads `LOCI_SESSION_SUMMARY` env var or stdin; saves each line (>20 chars) as a "session"-tagged memory
 
 ### Storage Schema
 

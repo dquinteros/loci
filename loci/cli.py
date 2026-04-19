@@ -173,12 +173,15 @@ def install_cmd() -> None:
     hooks_dir = Path.home() / ".loci" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy hook scripts to ~/.loci/hooks/
-    src_hooks = Path(__file__).parent.parent / "hooks"
-    if src_hooks.exists():
+    src_hooks = Path(__file__).parent / "hooks"
+    copied = 0
+    if src_hooks.is_dir():
         import shutil
         for hook_file in src_hooks.glob("*.py"):
+            if hook_file.name == "__init__.py":
+                continue
             shutil.copy(hook_file, hooks_dir / hook_file.name)
+            copied += 1
 
     python = sys.executable
     hook_cmd = lambda name: f"{python} {hooks_dir / name}"
@@ -198,5 +201,8 @@ def install_cmd() -> None:
     ]
 
     settings_path.write_text(json.dumps(existing, indent=2))
-    click.echo(f"installed loci hooks and MCP server in {settings_path}")
-    click.echo(f"hook scripts copied to {hooks_dir}")
+    click.echo(f"installed loci MCP server in {settings_path}")
+    if copied:
+        click.echo(f"copied {copied} hook scripts to {hooks_dir}")
+    else:
+        click.echo(f"warning: no hook scripts found in {src_hooks}")
