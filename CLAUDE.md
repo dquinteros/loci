@@ -37,6 +37,11 @@ loci add-doc https://example.com --tag web
 # Manually store a memory
 loci add "some text to remember" --tag manual
 
+# Export / import
+loci export            # print DB path
+loci export --json     # dump all memories as JSON
+loci import /path/to/other/memories.db
+
 # Start the MCP server (called by Claude Code automatically after loci install)
 loci serve
 ```
@@ -67,7 +72,7 @@ User/Claude Code
 |--------|---------------|
 | `loci/store.py` | SQLite schema, CRUD, FTS5 index, sqlite-vec vector index, deduplication |
 | `loci/embedder.py` | Wraps FastEmbed (`BAAI/bge-small-en-v1.5`, 384-dim) — singleton model |
-| `loci/chunker.py` | Recursive character text splitter (default 1024 chars) |
+| `loci/chunker.py` | Recursive character text splitter (default 1024 chars, code uses 2048) |
 | `loci/retriever.py` | Hybrid search: vector ANN + FTS5 keyword, merged via reciprocal rank fusion |
 | `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase` tools |
 | `loci/config.py` | All constants (paths, thresholds, model name, extensions) |
@@ -75,16 +80,16 @@ User/Claude Code
 
 ### Hooks (Claude Code Integration)
 
-Registered by `loci install` into `~/.claude/settings.json`:
+`loci install` copies hook scripts to `~/.loci/hooks/` and registers them in `~/.claude/settings.json`:
 
 - `hooks/session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin
-- `hooks/post_tool_use.py` — runs after every file edit, stores changed file content as a code memory
-- `hooks/session_stop.py` — runs when Claude Code stops, saves session summary lines as "session"-tagged memories
+- `hooks/post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory
+- `hooks/session_stop.py` — reads `LOCI_SESSION_SUMMARY` env var or stdin; saves each line (>20 chars) as a "session"-tagged memory
 
 ### Storage Schema
 
 Single SQLite DB at `~/.loci/memories.db` (overridable via `LOCI_DB_PATH`):
-- `memories` table — content, JSON tags, project path, source type, source_ref (file path), chunk_idx
+- `memories` table — content, JSON tags, project path, source type, source_ref (file path), chunk_idx, `is_stale` flag
 - `memories_fts` — FTS5 virtual table, auto-synced via triggers
 - `memories_vec` — sqlite-vec virtual table for ANN (float32[384])
 
@@ -92,6 +97,8 @@ Single SQLite DB at `~/.loci/memories.db` (overridable via `LOCI_DB_PATH`):
 
 - **Deduplication threshold:** cosine similarity ≥ 0.95 skips storing duplicate chunks (`store.py`)
 - **Project scoping:** memories are keyed to the git repo root (or CWD), so `recall` only returns relevant project context by default
-- **Hybrid retrieval:** RRF merges vector and keyword rankings — neither alone is used; both contribute
+- **Hybrid retrieval:** RRF merges vector and keyword rankings using `1/(rank+60)` — neither alone is used; both contribute
 - **Embedding model is a singleton:** loaded once in `embedder.py`, shared across the process to avoid reload overhead
-- **Incremental indexing:** `ingest_codebase()` compares `st_mtime` against `MAX(created_at)` per file; unchanged files are skipped. `--force` / `force=True` bypasses this check and replaces all chunks.
+- **Incremental indexing:** `ingest_codebase()` compares `st_mtime` against `MAX(created_at)` per file; unchanged files are skipped. `--force` / `force=True` bypasses this and replaces all chunks.
+- **Stale/delete pattern:** before reindexing a file, old chunks are marked `is_stale=True`; after new chunks are inserted, stale entries are deleted. This keeps the DB consistent if indexing is interrupted.
+- **Gitignore awareness:** `ingest/code.py` loads `.gitignore` patterns and skips matching paths; hidden directories (prefixed with `.`) are always skipped.
