@@ -81,7 +81,7 @@ User/Claude Code
 
 ### Hooks (Claude Code Integration)
 
-`loci install` copies hook scripts from the installed package (`loci/hooks/`) to `~/.loci/hooks/` and registers them in `~/.claude/settings.json`:
+`loci install` registers the MCP server in `~/.claude.json` (where Claude Code reads `mcpServers`), copies hook scripts from `loci/hooks/` to `~/.loci/hooks/`, and registers hooks in `~/.claude/settings.json`:
 
 - `loci/hooks/session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin
 - `loci/hooks/post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory
