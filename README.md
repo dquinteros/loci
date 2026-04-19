@@ -204,10 +204,16 @@ Claude Code session
 
 ### `AttributeError: 'sqlite3.Connection' object has no attribute 'enable_load_extension'`
 
-This means your Python was compiled without SQLite loadable-extension support. loci needs this for `sqlite-vec`. If you installed Python via pyenv, rebuild it:
+This means your Python was compiled without SQLite loadable-extension support. loci needs this for `sqlite-vec`.
+
+On **macOS**, the system SQLite doesn't support loadable extensions — you need Homebrew's SQLite. If you use pyenv, rebuild Python against it:
 
 ```bash
-PYTHON_CONFIGURE_OPTS="--enable-loadable-sqlite-extensions" pyenv install --force 3.10.0
+brew install sqlite
+PYTHON_CONFIGURE_OPTS="--enable-loadable-sqlite-extensions" \
+  LDFLAGS="-L$(brew --prefix sqlite)/lib" \
+  CPPFLAGS="-I$(brew --prefix sqlite)/include" \
+  pyenv install --force 3.10.16
 ```
 
 Then reinstall loci:
@@ -217,7 +223,7 @@ pip install -e .   # or: pip install git+https://github.com/dquinteros/loci.git
 loci install
 ```
 
-The install script (`install.sh`) detects this automatically and rebuilds Python if needed, so re-running the one-liner also works:
+The install script (`install.sh`) detects this automatically — it installs Homebrew SQLite and rebuilds Python if needed, so re-running the one-liner also works:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/dquinteros/loci/main/install.sh | bash

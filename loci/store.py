@@ -40,8 +40,12 @@ def _connect() -> sqlite3.Connection:
     except AttributeError:
         raise RuntimeError(
             "Python was built without SQLite extension support. "
-            "Reinstall with: PYTHON_CONFIGURE_OPTS='--enable-loadable-sqlite-extensions' "
-            "pyenv install --force 3.10.0"
+            "On macOS, install Homebrew SQLite and rebuild: "
+            "brew install sqlite && "
+            "PYTHON_CONFIGURE_OPTS='--enable-loadable-sqlite-extensions' "
+            "LDFLAGS='-L$(brew --prefix sqlite)/lib' "
+            "CPPFLAGS='-I$(brew --prefix sqlite)/include' "
+            "pyenv install --force <version>"
         ) from None
     sqlite_vec.load(con)
     con.enable_load_extension(False)

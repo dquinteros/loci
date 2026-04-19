@@ -4,6 +4,7 @@ set -euo pipefail
 REPO="https://github.com/dquinteros/loci"
 MIN_PYTHON_MAJOR=3
 MIN_PYTHON_MINOR=10
+PYENV_PYTHON_VERSION=3.10.16
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -31,7 +32,20 @@ check_sqlite_extensions() {
   "$py" -c "import sqlite3; sqlite3.connect(':memory:').enable_load_extension(True)" 2>/dev/null
 }
 
-# ── install pyenv + python 3.10 if needed ────────────────────────────────────
+# ── build flags for pyenv on macOS (Homebrew SQLite) ─────────────────────────
+
+pyenv_build_env() {
+  local env="PYTHON_CONFIGURE_OPTS=--enable-loadable-sqlite-extensions"
+  if [[ "$OSTYPE" == darwin* ]] && command -v brew &>/dev/null; then
+    brew list sqlite &>/dev/null || brew install sqlite
+    local sqlite_prefix
+    sqlite_prefix="$(brew --prefix sqlite)"
+    env="$env LDFLAGS=-L${sqlite_prefix}/lib CPPFLAGS=-I${sqlite_prefix}/include PKG_CONFIG_PATH=${sqlite_prefix}/lib/pkgconfig"
+  fi
+  echo "$env"
+}
+
+# ── install pyenv + python if needed ─────────────────────────────────────────
 
 install_python_via_pyenv() {
   bold "Python 3.10+ not found — installing via pyenv..."
@@ -48,12 +62,40 @@ install_python_via_pyenv() {
     fi
   fi
 
-  bold "Installing Python 3.10.0 via pyenv (with SQLite extension support)..."
-  PYTHON_CONFIGURE_OPTS="--enable-loadable-sqlite-extensions" pyenv install -s 3.10.0
-  pyenv global 3.10.0
+  bold "Installing Python ${PYENV_PYTHON_VERSION} via pyenv (with SQLite extension support)..."
+  eval "$(pyenv_build_env) pyenv install -s ${PYENV_PYTHON_VERSION}"
+  pyenv global "$PYENV_PYTHON_VERSION"
 
   export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
   export PATH="$PYENV_ROOT/shims:$PATH"
+}
+
+rebuild_python_via_pyenv() {
+  bold "Python lacks SQLite extension support — rebuilding with pyenv..."
+  if ! command -v pyenv &>/dev/null; then
+    red "ERROR: your Python does not support SQLite loadable extensions."
+    red "If using pyenv, reinstall with:"
+    red "  $(pyenv_build_env) pyenv install --force ${PYENV_PYTHON_VERSION}"
+    exit 1
+  fi
+
+  local current_version
+  current_version="$(pyenv version-name 2>/dev/null || echo "")"
+  local target="${current_version:-$PYENV_PYTHON_VERSION}"
+
+  bold "Rebuilding Python ${target} with Homebrew SQLite..."
+  eval "$(pyenv_build_env) pyenv install --force ${target}"
+
+  PYTHON=$(find_python) || {
+    red "ERROR: could not find a usable Python after pyenv rebuild."
+    exit 1
+  }
+  if ! check_sqlite_extensions "$PYTHON"; then
+    red "ERROR: rebuilt Python still lacks SQLite extension support."
+    red "Try: $(pyenv_build_env) pyenv install --force ${target}"
+    exit 1
+  fi
+  green "Rebuilt Python ${target} with SQLite extension support."
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -74,25 +116,7 @@ main() {
   green "Using Python: $($PYTHON --version)"
 
   if ! check_sqlite_extensions "$PYTHON"; then
-    bold "Python lacks SQLite extension support — rebuilding with pyenv..."
-    if command -v pyenv &>/dev/null; then
-      PYTHON_CONFIGURE_OPTS="--enable-loadable-sqlite-extensions" pyenv install --force 3.10.0
-      PYTHON=$(find_python) || {
-        red "ERROR: could not find a usable Python after pyenv rebuild."
-        exit 1
-      }
-      if ! check_sqlite_extensions "$PYTHON"; then
-        red "ERROR: rebuilt Python still lacks SQLite extension support."
-        red "Try: PYTHON_CONFIGURE_OPTS=\"--enable-loadable-sqlite-extensions\" pyenv install --force 3.10.0"
-        exit 1
-      fi
-      green "Rebuilt Python with SQLite extension support."
-    else
-      red "ERROR: your Python does not support SQLite loadable extensions."
-      red "If using pyenv, reinstall with:"
-      red "  PYTHON_CONFIGURE_OPTS=\"--enable-loadable-sqlite-extensions\" pyenv install --force 3.10.0"
-      exit 1
-    fi
+    rebuild_python_via_pyenv
   fi
 
   bold "Installing loci from GitHub..."
