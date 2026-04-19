@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install in editable mode (required before running anything)
 pip install -e .
 
-# Register loci as an MCP server + hooks in ~/.claude/settings.json
+# Register loci as an MCP server + hooks
 loci install
 
 # Index the current codebase into memory (incremental by default)
@@ -66,11 +66,13 @@ User/Claude Code
       │
       ├─ MCP tools (loci serve) ──────────────────► mcp_server.py
       │                                              ↓
-      ├─ CLI commands (loci add/search/index) ──► cli.py
+      ├─ CLI commands (loci add/search/ref/…) ──► cli.py
       │                                              ↓
       └─ Claude Code hooks ──────────────────────► loci/hooks/
                                                      ↓
                                               retriever.py / store.py
+                                                     ↓        ↑
+                                              refs.py (cross-project graph)
                                                      ↓
                                               ~/.loci/memories.db (SQLite)
 ```
@@ -84,7 +86,7 @@ User/Claude Code
 | `loci/chunker.py` | Recursive character text splitter (default 1024 chars, code uses 2048) |
 | `loci/refs.py` | Cross-project reference graph: CRUD + BFS resolver for multi-project search |
 | `loci/retriever.py` | Hybrid search: vector ANN + FTS5 keyword, merged via reciprocal rank fusion |
-| `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase` tools |
+| `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase`, `add_ref`, `remove_ref`, `list_refs`, `index_ref` tools |
 | `loci/config.py` | All constants (paths, thresholds, model name, extensions) |
 | `loci/ingest/` | Source-specific ingestion: `code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py` |
 | `loci/hooks/` | Hook scripts bundled inside the package; `loci install` copies them to `~/.loci/hooks/` |
@@ -93,7 +95,7 @@ User/Claude Code
 
 `loci install` registers the MCP server in `~/.claude.json` (where Claude Code reads `mcpServers`), copies hook scripts from `loci/hooks/` to `~/.loci/hooks/`, and registers hooks in `~/.claude/settings.json`:
 
-- `loci/hooks/session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin
+- `loci/hooks/session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin; cross-project memories are prefixed with `[ref:project-name]`
 - `loci/hooks/post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory
 - `loci/hooks/session_stop.py` — reads `LOCI_SESSION_SUMMARY` env var or stdin; saves each line (>20 chars) as a "session"-tagged memory
 
@@ -114,7 +116,7 @@ MCP tools: `add_ref`, `remove_ref`, `list_refs`, `index_ref`.
 ### Key Design Decisions
 
 - **Deduplication threshold:** cosine similarity ≥ 0.95 skips storing duplicate chunks (`store.py`)
-- **Project scoping:** memories are keyed to the git repo root (or CWD), so `recall` only returns relevant project context by default
+- **Project scoping:** memories are keyed to the git repo root (or CWD), so `recall` only returns relevant project context by default. Cross-project references extend this to include referenced projects with a 0.7× RRF weight penalty.
 - **Hybrid retrieval:** RRF merges vector and keyword rankings using `1/(rank+60)` — neither alone is used; both contribute
 - **Embedding model is a singleton:** loaded once in `embedder.py`, shared across the process to avoid reload overhead
 - **Incremental indexing:** `ingest_codebase()` compares `st_mtime` against `MAX(created_at)` per file; unchanged files are skipped. `--force` / `force=True` bypasses this and replaces all chunks.
