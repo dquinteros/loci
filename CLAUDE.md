@@ -9,7 +9,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install in editable mode (required before running anything)
+# One-liner remote install (handles Python/pyenv/SQLite setup)
+curl -sSL https://raw.githubusercontent.com/dquinteros/loci/main/install.sh | bash
+
+# Or install in editable mode for development
 pip install -e .
 
 # Register loci as an MCP server + hooks (safe to re-run, preserves other hooks)
@@ -90,17 +93,20 @@ User/Claude Code
 | `loci/refs.py` | Cross-project reference graph: CRUD + BFS resolver for multi-project search |
 | `loci/retriever.py` | Hybrid search: vector ANN + FTS5 keyword, merged via reciprocal rank fusion |
 | `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase`, `add_ref`, `remove_ref`, `list_refs`, `index_ref` tools |
+| `loci/cli.py` | Click CLI: all user-facing commands including `install`/`uninstall`, `ref` subgroup, `index-ref` |
 | `loci/config.py` | All constants (paths, thresholds, model name, extensions) |
 | `loci/ingest/` | Source-specific ingestion: `code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py` |
 | `loci/hooks/` | Hook scripts bundled inside the package; `loci install` copies them to `~/.loci/hooks/` |
 
 ### Hooks (Claude Code Integration)
 
-`loci install` registers the MCP server in `~/.claude.json` (where Claude Code reads `mcpServers`), copies hook scripts from `loci/hooks/` to `~/.loci/hooks/`, and registers hooks in `~/.claude/settings.json`:
+`loci install` registers the MCP server in `~/.claude.json` (where Claude Code reads `mcpServers`), copies hook scripts from `loci/hooks/` to `~/.loci/hooks/`, and appends hooks to `~/.claude/settings.json`. It is idempotent — safe to re-run, replaces only its own entries (detected via the `/.loci/hooks/` marker in command strings), and preserves other hooks in the same event slots. `loci uninstall` reverses this, removing only loci entries from both files.
 
-- `loci/hooks/session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin; cross-project memories are prefixed with `[ref:project-name]`
-- `loci/hooks/post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory
-- `loci/hooks/session_stop.py` — reads `LOCI_SESSION_SUMMARY` env var or stdin; saves each line (>20 chars) as a "session"-tagged memory
+Hook scripts:
+
+- `session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin; cross-project memories are prefixed with `[ref:project-name]`
+- `post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory
+- `session_stop.py` — reads `LOCI_SESSION_SUMMARY` env var or stdin; saves each line (>20 chars) as a "session"-tagged memory
 
 ### Storage Schema
 
@@ -125,4 +131,5 @@ MCP tools: `add_ref`, `remove_ref`, `list_refs`, `index_ref`.
 - **Incremental indexing:** `ingest_codebase()` compares `st_mtime` against `MAX(created_at)` per file; unchanged files are skipped. `--force` / `force=True` bypasses this and replaces all chunks.
 - **Stale/delete pattern:** before reindexing a file, old chunks are marked `is_stale=True`; after new chunks are inserted, stale entries are deleted. This keeps the DB consistent if indexing is interrupted.
 - **Gitignore awareness:** `ingest/code.py` loads `.gitignore` patterns and skips matching paths; hidden directories (prefixed with `.`) are always skipped.
-- **SQLite extension requirement:** `sqlite-vec` needs Python built with `--enable-loadable-sqlite-extensions`. On macOS the system SQLite lacks this, so the install script installs Homebrew SQLite and links Python against it. `store.py` raises a clear `RuntimeError` if the capability is missing at runtime.
+- **Idempotent install/uninstall:** `loci install` uses a `/.loci/hooks/` marker in hook command strings to identify its own entries. It strips any existing loci hooks before appending fresh ones, so re-running never duplicates. `loci uninstall` uses the same marker to selectively remove loci entries without touching other hooks.
+- **SQLite extension requirement:** `sqlite-vec` needs Python built with `--enable-loadable-sqlite-extensions`. On macOS the system SQLite lacks this, so the install script (`install.sh`) installs Homebrew SQLite and links Python against it. `store.py` raises a clear `RuntimeError` if the capability is missing at runtime.
