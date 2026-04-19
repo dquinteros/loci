@@ -210,73 +210,108 @@ def serve_cmd() -> None:
     serve()
 
 
+LOCI_HOOK_MARKER = "/.loci/hooks/"
+
+LOCI_HOOKS = {
+    "SessionStart": "session_start.py",
+    "Stop": "session_stop.py",
+    "PostToolUse": "post_tool_use.py",
+}
+
+
+def _is_loci_hook_entry(entry: dict) -> bool:
+    hooks = entry.get("hooks", [])
+    return any(LOCI_HOOK_MARKER in h.get("command", "") for h in hooks)
+
+
+def _read_json(path: Path) -> dict:
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
 @main.command("install")
 def install_cmd() -> None:
     """Register loci MCP server and hooks with Claude Code."""
+    import shutil
+
     loci_bin = str(Path(sys.executable).parent / "loci")
     python = sys.executable
-
-    # --- MCP server: written to ~/.claude.json (where Claude Code reads mcpServers) ---
-    claude_json_path = Path.home() / ".claude.json"
-    claude_cfg: dict = {}
-    if claude_json_path.exists():
-        try:
-            claude_cfg = json.loads(claude_json_path.read_text())
-        except json.JSONDecodeError:
-            pass
-
-    claude_cfg.setdefault("mcpServers", {})
-    claude_cfg["mcpServers"]["loci"] = {
-        "type": "stdio",
-        "command": loci_bin,
-        "args": ["serve"],
-    }
-    claude_json_path.write_text(json.dumps(claude_cfg, indent=2))
-    click.echo(f"registered loci MCP server in {claude_json_path}")
-
-    # --- Hooks: written to ~/.claude/settings.json ---
-    settings_path = Path.home() / ".claude" / "settings.json"
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-
-    settings: dict = {}
-    if settings_path.exists():
-        try:
-            settings = json.loads(settings_path.read_text())
-        except json.JSONDecodeError:
-            pass
-
-    # Remove stale mcpServers key if it was written by an older version
-    settings.pop("mcpServers", None)
-
     hooks_dir = Path.home() / ".loci" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     src_hooks = Path(__file__).parent / "hooks"
     copied = 0
     if src_hooks.is_dir():
-        import shutil
         for hook_file in src_hooks.glob("*.py"):
             if hook_file.name == "__init__.py":
                 continue
             shutil.copy(hook_file, hooks_dir / hook_file.name)
             copied += 1
 
+    claude_json_path = Path.home() / ".claude.json"
+    claude_cfg = _read_json(claude_json_path)
+    claude_cfg.setdefault("mcpServers", {})
+    claude_cfg["mcpServers"]["loci"] = {
+        "type": "stdio",
+        "command": loci_bin,
+        "args": ["serve"],
+    }
+    _write_json(claude_json_path, claude_cfg)
+    click.echo(f"registered MCP server in {claude_json_path}")
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    settings = _read_json(settings_path)
+    settings.pop("mcpServers", None)
+    settings.setdefault("hooks", {})
+
     hook_cmd = lambda name: f"{python} {hooks_dir / name}"
 
-    settings.setdefault("hooks", {})
-    settings["hooks"]["SessionStart"] = [
-        {"hooks": [{"type": "command", "command": hook_cmd("session_start.py")}]}
-    ]
-    settings["hooks"]["Stop"] = [
-        {"hooks": [{"type": "command", "command": hook_cmd("session_stop.py")}]}
-    ]
-    settings["hooks"]["PostToolUse"] = [
-        {"hooks": [{"type": "command", "command": hook_cmd("post_tool_use.py")}]}
-    ]
+    for event, script in LOCI_HOOKS.items():
+        existing = settings["hooks"].get(event, [])
+        filtered = [e for e in existing if not _is_loci_hook_entry(e)]
+        loci_entry = {"hooks": [{"type": "command", "command": hook_cmd(script)}]}
+        filtered.append(loci_entry)
+        settings["hooks"][event] = filtered
 
-    settings_path.write_text(json.dumps(settings, indent=2))
+    _write_json(settings_path, settings)
     click.echo(f"registered hooks in {settings_path}")
     if copied:
         click.echo(f"copied {copied} hook scripts to {hooks_dir}")
     else:
         click.echo(f"warning: no hook scripts found in {src_hooks}")
+
+
+@main.command("uninstall")
+def uninstall_cmd() -> None:
+    """Remove loci MCP server and hooks from Claude Code."""
+    claude_json_path = Path.home() / ".claude.json"
+    claude_cfg = _read_json(claude_json_path)
+    removed_mcp = False
+    if "mcpServers" in claude_cfg and "loci" in claude_cfg["mcpServers"]:
+        del claude_cfg["mcpServers"]["loci"]
+        _write_json(claude_json_path, claude_cfg)
+        removed_mcp = True
+    click.echo(f"{'removed' if removed_mcp else 'no'} MCP server in {claude_json_path}")
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    settings = _read_json(settings_path)
+    hooks_changed = False
+    for event in LOCI_HOOKS:
+        existing = settings.get("hooks", {}).get(event, [])
+        filtered = [e for e in existing if not _is_loci_hook_entry(e)]
+        if len(filtered) != len(existing):
+            hooks_changed = True
+            settings.setdefault("hooks", {})[event] = filtered
+
+    if hooks_changed:
+        _write_json(settings_path, settings)
+    click.echo(f"{'removed' if hooks_changed else 'no'} hooks in {settings_path}")

@@ -12,8 +12,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install in editable mode (required before running anything)
 pip install -e .
 
-# Register loci as an MCP server + hooks
+# Register loci as an MCP server + hooks (safe to re-run, preserves other hooks)
 loci install
+
+# Remove loci MCP server and hooks from Claude Code
+loci uninstall
 
 # Index the current codebase into memory (incremental by default)
 loci index
