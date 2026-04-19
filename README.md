@@ -32,7 +32,7 @@ Memory lives in a local SQLite database (`~/.loci/memories.db`) and never leaves
 ## Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/dquinteros/loci/master/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/dquinteros/loci/main/install.sh | bash
 ```
 
 The script detects Python 3.10+, installs it via pyenv if missing, then registers loci as an MCP server and hooks with Claude Code.
