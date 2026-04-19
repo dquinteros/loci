@@ -9,5 +9,16 @@ DEDUP_COS    = 0.95
 REF_WEIGHT   = 0.7
 CHUNK_SIZE   = 1024
 
+SKIP_DIRS: frozenset[str] = frozenset({
+    "node_modules", "__pycache__", ".git", ".hg", ".svn",
+    ".venv", "venv", ".env", "env",
+    "vendor", "target", "build", "dist",
+    ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".next", ".nuxt", ".output", ".turbo",
+    "coverage", ".coverage", "htmlcov",
+    ".idea", ".vscode",
+    "site-packages",
+})
+
 CODE_EXTENSIONS = {".py", ".ts", ".js", ".go", ".rs", ".java", ".tsx", ".jsx", ".rb", ".cpp", ".c", ".h"}
 DOC_EXTENSIONS  = {".pdf", ".docx", ".md", ".txt"}

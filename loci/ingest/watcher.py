@@ -58,6 +58,9 @@ class CodeWatcher(FileSystemEventHandler):
         path = Path(event.src_path)
         if path.suffix not in config.CODE_EXTENSIONS:
             return
+        rel_parts = path.relative_to(self.cwd).parts[:-1]
+        if any(p in config.SKIP_DIRS or p.startswith(".") for p in rel_parts):
+            return
         if code_ingest._is_ignored(path, self._patterns, self.cwd):
             return
         now = time.time()

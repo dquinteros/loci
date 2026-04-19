@@ -94,7 +94,7 @@ User/Claude Code
 | `loci/retriever.py` | Hybrid search: vector ANN + FTS5 keyword, merged via reciprocal rank fusion |
 | `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase`, `add_ref`, `remove_ref`, `list_refs`, `index_ref` tools |
 | `loci/cli.py` | Click CLI: all user-facing commands including `install`/`uninstall`, `ref` subgroup, `index-ref` |
-| `loci/config.py` | All constants (paths, thresholds, model name, extensions) |
+| `loci/config.py` | All constants (paths, thresholds, model name, extensions, `SKIP_DIRS`) |
 | `loci/ingest/` | Source-specific ingestion: `code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py` |
 | `loci/hooks/` | Hook scripts bundled inside the package; `loci install` copies them to `~/.loci/hooks/` |
 
@@ -130,6 +130,7 @@ MCP tools: `add_ref`, `remove_ref`, `list_refs`, `index_ref`.
 - **Embedding model is a singleton:** loaded once in `embedder.py`, shared across the process to avoid reload overhead
 - **Incremental indexing:** `ingest_codebase()` compares `st_mtime` against `MAX(created_at)` per file; unchanged files are skipped. `--force` / `force=True` bypasses this and replaces all chunks.
 - **Stale/delete pattern:** before reindexing a file, old chunks are marked `is_stale=True`; after new chunks are inserted, stale entries are deleted. This keeps the DB consistent if indexing is interrupted.
-- **Gitignore awareness:** `ingest/code.py` loads `.gitignore` patterns and skips matching paths; hidden directories (prefixed with `.`) are always skipped.
+- **Directory pruning:** `ingest/code.py` uses `os.walk` (not `rglob`) with in-place `dirnames` pruning. Directories in `config.SKIP_DIRS` (e.g. `node_modules`, `venv`, `__pycache__`, `build`, `dist`) and hidden directories are never descended into, avoiding expensive enumeration of large dependency trees.
+- **Gitignore awareness:** `ingest/code.py` uses `pathspec` (gitwildmatch) to match `.gitignore` patterns, supporting directory patterns (`node_modules/`), `**` globs, and negation — unlike the previous `fnmatch` approach which couldn't match directory-style patterns.
 - **Idempotent install/uninstall:** `loci install` uses a `/.loci/hooks/` marker in hook command strings to identify its own entries. It strips any existing loci hooks before appending fresh ones, so re-running never duplicates. `loci uninstall` uses the same marker to selectively remove loci entries without touching other hooks.
 - **SQLite extension requirement:** `sqlite-vec` needs Python built with `--enable-loadable-sqlite-extensions`. On macOS the system SQLite lacks this, so the install script (`install.sh`) installs Homebrew SQLite and links Python against it. `store.py` raises a clear `RuntimeError` if the capability is missing at runtime.

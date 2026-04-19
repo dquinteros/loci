@@ -1,31 +1,22 @@
 from __future__ import annotations
+import os
 from pathlib import Path
+
+import pathspec
 
 from .. import config, store
 from ..chunker import chunk
 
-_GITIGNORE_PATTERNS: list[str] = []
 
-
-def _load_gitignore(cwd: Path) -> list[str]:
+def _load_gitignore(cwd: Path) -> pathspec.PathSpec:
     gi = cwd / ".gitignore"
-    if not gi.exists():
-        return []
-    patterns = []
-    for line in gi.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            patterns.append(line)
-    return patterns
+    lines = gi.read_text().splitlines() if gi.exists() else []
+    return pathspec.PathSpec.from_lines("gitwildmatch", lines)
 
 
-def _is_ignored(path: Path, patterns: list[str], cwd: Path) -> bool:
-    import fnmatch
+def _is_ignored(path: Path, spec: pathspec.PathSpec, cwd: Path) -> bool:
     rel = str(path.relative_to(cwd))
-    for pat in patterns:
-        if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(path.name, pat):
-            return True
-    return False
+    return spec.match_file(rel)
 
 
 def ingest_file(path: str | Path, project: str = "") -> int:
@@ -50,34 +41,40 @@ def ingest_codebase(
     cwd: str | Path,
     project: str = "",
     incremental: bool = True,
-) -> tuple[int, int]:  # (chunks_added, files_skipped)
+) -> tuple[int, int]:
     cwd = Path(cwd)
-    patterns = _load_gitignore(cwd)
+    spec = _load_gitignore(cwd)
     total = 0
     skipped = 0
-    for path in cwd.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.suffix not in config.CODE_EXTENSIONS:
-            continue
-        if _is_ignored(path, patterns, cwd):
-            continue
-        if any(part.startswith(".") for part in path.parts):
-            continue
 
-        if incremental:
-            last = store.last_indexed(str(path))
-            if last is not None and path.stat().st_mtime <= last:
-                skipped += 1
+    for dirpath, dirnames, filenames in os.walk(cwd, topdown=True):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in config.SKIP_DIRS
+            and not d.startswith(".")
+            and not _is_ignored(Path(dirpath) / d / "", spec, cwd)
+        ]
+
+        for fname in filenames:
+            path = Path(dirpath) / fname
+            if path.suffix not in config.CODE_EXTENSIONS:
                 continue
-            if last is not None:
+            if _is_ignored(path, spec, cwd):
+                continue
+
+            if incremental:
+                last = store.last_indexed(str(path))
+                if last is not None and path.stat().st_mtime <= last:
+                    skipped += 1
+                    continue
+                if last is not None:
+                    store.mark_stale(str(path))
+                total += ingest_file(path, project=project)
+                if last is not None:
+                    store.delete_stale(str(path))
+            else:
                 store.mark_stale(str(path))
-            total += ingest_file(path, project=project)
-            if last is not None:
+                total += ingest_file(path, project=project)
                 store.delete_stale(str(path))
-        else:
-            store.mark_stale(str(path))
-            total += ingest_file(path, project=project)
-            store.delete_stale(str(path))
 
     return total, skipped
