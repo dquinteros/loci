@@ -7,7 +7,7 @@
  ╚══════╝ ╚═════╝  ╚═════╝╚═╝
 ```
 
-> **Local RAG memory for Claude Code.** Loci gives Claude persistent, searchable memory of your projects — code, documents, and sessions — stored entirely on your machine.
+> **Lo**cal **C**ontext **I**ntelligence for Claude Code. Loci gives Claude persistent, searchable memory of your projects — code, documents, and sessions — stored entirely on your machine.
 
 ---
 
