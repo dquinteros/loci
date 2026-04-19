@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 
-from . import config, store, retriever
+from . import config, store, retriever, refs
 from .store import init_db
 
 
@@ -148,6 +148,59 @@ def import_cmd(db_path: str) -> None:
         if mem_id:
             count += 1
     click.echo(f"imported {count} memories (duplicates skipped)")
+
+
+@main.group("ref")
+def ref_group() -> None:
+    """Manage cross-project references."""
+
+
+@ref_group.command("add")
+@click.argument("path")
+def ref_add(path: str) -> None:
+    """Add a reference to another project."""
+    resolved = str(Path(path).resolve())
+    if refs.add_ref(str(Path.cwd()), resolved):
+        click.echo(f"added ref -> {resolved}")
+    else:
+        click.echo(f"ref already exists -> {resolved}")
+
+
+@ref_group.command("remove")
+@click.argument("path")
+def ref_remove(path: str) -> None:
+    """Remove a reference to another project."""
+    resolved = str(Path(path).resolve())
+    if refs.remove_ref(str(Path.cwd()), resolved):
+        click.echo(f"removed ref -> {resolved}")
+    else:
+        click.echo(f"ref not found -> {resolved}")
+
+
+@ref_group.command("list")
+def ref_list() -> None:
+    """List all project references."""
+    entries = refs.list_refs(str(Path.cwd()))
+    if not entries:
+        click.echo("No references.")
+        return
+    for _, dst, _ in entries:
+        click.echo(dst)
+
+
+@main.command("index-ref")
+@click.argument("path")
+@click.option("--force", is_flag=True, default=False,
+              help="Reindex all files even if unchanged")
+def index_ref_cmd(path: str, force: bool) -> None:
+    """Index a referenced project's codebase."""
+    from .ingest import code as code_ingest
+    resolved = Path(path).resolve()
+    refs.add_ref(str(Path.cwd()), str(resolved))
+    added, skipped = code_ingest.ingest_codebase(
+        resolved, project=str(resolved), incremental=not force
+    )
+    click.echo(f"indexed {added} new chunks from {resolved} ({skipped} files unchanged)")
 
 
 @main.command("serve")

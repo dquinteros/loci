@@ -3,7 +3,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from . import store, retriever
+from . import store, retriever, refs
 from .store import init_db
 
 mcp = FastMCP("loci")
@@ -56,6 +56,45 @@ def index_codebase(force: bool = False) -> str:
         Path.cwd(), project=str(Path.cwd()), incremental=not force
     )
     return f"indexed {added} new chunks ({skipped} files unchanged)"
+
+
+@mcp.tool()
+def add_ref(target_project: str) -> str:
+    """Add a cross-project reference so this project's searches include the target."""
+    init_db()
+    resolved = str(Path(target_project).resolve())
+    added = refs.add_ref(str(Path.cwd()), resolved)
+    return f"added:{resolved}" if added else f"exists:{resolved}"
+
+
+@mcp.tool()
+def remove_ref(target_project: str) -> str:
+    """Remove a cross-project reference."""
+    init_db()
+    resolved = str(Path(target_project).resolve())
+    removed = refs.remove_ref(str(Path.cwd()), resolved)
+    return f"removed:{resolved}" if removed else f"not_found:{resolved}"
+
+
+@mcp.tool()
+def list_refs() -> list[dict]:
+    """List all cross-project references for this project."""
+    init_db()
+    entries = refs.list_refs(str(Path.cwd()))
+    return [{"project": dst, "created_at": ts} for _, dst, ts in entries]
+
+
+@mcp.tool()
+def index_ref(target_project: str, force: bool = False) -> str:
+    """Index a referenced project's codebase. Automatically adds the ref if missing."""
+    init_db()
+    from .ingest import code as code_ingest
+    resolved = Path(target_project).resolve()
+    refs.add_ref(str(Path.cwd()), str(resolved))
+    added, skipped = code_ingest.ingest_codebase(
+        resolved, project=str(resolved), incremental=not force
+    )
+    return f"indexed {added} new chunks from {resolved} ({skipped} files unchanged)"
 
 
 def serve() -> None:

@@ -86,6 +86,13 @@ def init_db() -> None:
             INSERT INTO memories_fts(memories_fts, rowid, content, tags)
             VALUES('delete', old.rowid, old.content, old.tags);
         END;
+
+        CREATE TABLE IF NOT EXISTS project_refs (
+            src_project TEXT NOT NULL,
+            dst_project TEXT NOT NULL,
+            created_at  REAL NOT NULL,
+            PRIMARY KEY (src_project, dst_project)
+        );
     """)
     con.commit()
     con.close()
@@ -190,14 +197,18 @@ def last_indexed(source_ref: str) -> float | None:
 
 
 def vector_search(
-    emb: np.ndarray, k: int = config.TOP_K, project: str | None = None
+    emb: np.ndarray,
+    k: int = config.TOP_K,
+    project: str | None = None,
+    projects: list[str] | None = None,
 ) -> list[tuple[str, float]]:
+    allowed = set(projects) if projects else ({project} if project else None)
     emb_bytes = emb.astype(np.float32).tobytes()
     con = _connect()
     try:
         rows = con.execute(
             "SELECT rowid, distance FROM memories_vec WHERE embedding MATCH ? AND k=?",
-            (emb_bytes, k * 3 if project else k),
+            (emb_bytes, k * 3 if allowed else k),
         ).fetchall()
         if not rows:
             return []
@@ -210,7 +221,7 @@ def vector_search(
 
         results = []
         for mr in mem_rows:
-            if project and mr["project"] != project:
+            if allowed and mr["project"] not in allowed:
                 continue
             dist = dist_map[mr["rowid"]]
             score = max(0.0, 1.0 - dist)
@@ -222,8 +233,12 @@ def vector_search(
 
 
 def fts_search(
-    query: str, k: int = config.TOP_K, project: str | None = None
+    query: str,
+    k: int = config.TOP_K,
+    project: str | None = None,
+    projects: list[str] | None = None,
 ) -> list[tuple[str, float]]:
+    allowed = set(projects) if projects else ({project} if project else None)
     con = _connect()
     try:
         rows = con.execute(
@@ -231,11 +246,11 @@ def fts_search(
             " JOIN memories m ON m.rowid = f.rowid"
             " WHERE memories_fts MATCH ?"
             " ORDER BY rank LIMIT ?",
-            (query, k * 3 if project else k),
+            (query, k * 3 if allowed else k),
         ).fetchall()
         results = []
         for row in rows:
-            if project and row["project"] != project:
+            if allowed and row["project"] not in allowed:
                 continue
             results.append((row["id"], -row["rank"]))
         return results[:k]

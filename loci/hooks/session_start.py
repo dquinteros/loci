@@ -19,7 +19,8 @@ try:
     if memories:
         print("<loci-context>")
         for m in memories:
-            print(f"- {m.content}")
+            label = f"[ref:{Path(m.project).name}] " if m.project != project else ""
+            print(f"- {label}{m.content}")
         print("</loci-context>")
 except Exception as exc:
     print(f"[loci] session_start error: {exc}", file=sys.stderr)

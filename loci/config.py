@@ -6,6 +6,7 @@ EMBED_MODEL  = "BAAI/bge-small-en-v1.5"
 WATCH_FOLDER = Path.home() / "loci-docs"
 TOP_K        = 5
 DEDUP_COS    = 0.95
+REF_WEIGHT   = 0.7
 CHUNK_SIZE   = 1024
 
 CODE_EXTENSIONS = {".py", ".ts", ".js", ".go", ".rs", ".java", ".tsx", ".jsx", ".rb", ".cpp", ".c", ".h"}

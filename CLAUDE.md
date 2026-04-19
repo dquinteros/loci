@@ -42,6 +42,15 @@ loci export            # print DB path
 loci export --json     # dump all memories as JSON
 loci import /path/to/other/memories.db
 
+# Cross-project references
+loci ref add ../other-project    # declare a reference to another project
+loci ref remove ../other-project # remove a reference
+loci ref list                    # list all references from this project
+
+# Index a referenced project's codebase (auto-adds the ref)
+loci index-ref ../other-project
+loci index-ref ../other-project --force
+
 # Start the MCP server (called by Claude Code automatically after loci install)
 loci serve
 ```
@@ -73,6 +82,7 @@ User/Claude Code
 | `loci/store.py` | SQLite schema, CRUD, FTS5 index, sqlite-vec vector index, deduplication |
 | `loci/embedder.py` | Wraps FastEmbed (`BAAI/bge-small-en-v1.5`, 384-dim) — singleton model |
 | `loci/chunker.py` | Recursive character text splitter (default 1024 chars, code uses 2048) |
+| `loci/refs.py` | Cross-project reference graph: CRUD + BFS resolver for multi-project search |
 | `loci/retriever.py` | Hybrid search: vector ANN + FTS5 keyword, merged via reciprocal rank fusion |
 | `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase` tools |
 | `loci/config.py` | All constants (paths, thresholds, model name, extensions) |
@@ -93,6 +103,13 @@ Single SQLite DB at `~/.loci/memories.db` (overridable via `LOCI_DB_PATH`):
 - `memories` table — content, JSON tags, project path, source type, source_ref (file path), chunk_idx, `is_stale` flag
 - `memories_fts` — FTS5 virtual table, auto-synced via triggers
 - `memories_vec` — sqlite-vec virtual table for ANN (float32[384])
+- `project_refs` — directed graph of cross-project references (`src_project -> dst_project`)
+
+### Cross-Project References
+
+Projects can declare references to other projects via `loci ref add`. When a reference exists, `recall`/`search` automatically surfaces memories from referenced projects alongside local ones. Referenced-project results are weighted by `REF_WEIGHT` (0.7) during RRF fusion so local results rank higher. The reference graph supports BFS traversal up to 2 hops deep (`refs.resolve_projects()`). The session start hook prefixes cross-project memories with `[ref:project-name]` for clarity.
+
+MCP tools: `add_ref`, `remove_ref`, `list_refs`, `index_ref`.
 
 ### Key Design Decisions
 
