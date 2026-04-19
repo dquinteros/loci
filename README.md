@@ -26,6 +26,7 @@ Memory lives in a local SQLite database (`~/.loci/memories.db`) and never leaves
 ## Requirements
 
 - [Claude Code](https://claude.ai/code) CLI installed
+- Python 3.10+ **with SQLite loadable-extension support** (the install script handles this automatically; see [Troubleshooting](#troubleshooting) if you hit issues)
 
 ---
 
@@ -35,7 +36,7 @@ Memory lives in a local SQLite database (`~/.loci/memories.db`) and never leaves
 curl -sSL https://raw.githubusercontent.com/dquinteros/loci/main/install.sh | bash
 ```
 
-The script detects Python 3.10+, installs it via pyenv if missing, then registers loci as an MCP server and hooks with Claude Code.
+The script detects Python 3.10+, installs it via pyenv if missing (with SQLite extension support enabled), then registers loci as an MCP server and hooks with Claude Code. If an existing Python lacks extension support, the script rebuilds it automatically.
 
 Restart Claude Code after installing.
 
@@ -195,6 +196,31 @@ Claude Code session
            loci/store.py      ← SQLite + sqlite-vec + FTS5 virtual tables
                   │
            ~/.loci/memories.db
+```
+
+---
+
+## Troubleshooting
+
+### `AttributeError: 'sqlite3.Connection' object has no attribute 'enable_load_extension'`
+
+This means your Python was compiled without SQLite loadable-extension support. loci needs this for `sqlite-vec`. If you installed Python via pyenv, rebuild it:
+
+```bash
+PYTHON_CONFIGURE_OPTS="--enable-loadable-sqlite-extensions" pyenv install --force 3.10.0
+```
+
+Then reinstall loci:
+
+```bash
+pip install -e .   # or: pip install git+https://github.com/dquinteros/loci.git
+loci install
+```
+
+The install script (`install.sh`) detects this automatically and rebuilds Python if needed, so re-running the one-liner also works:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/dquinteros/loci/main/install.sh | bash
 ```
 
 ---

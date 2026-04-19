@@ -35,7 +35,14 @@ def _connect() -> sqlite3.Connection:
     con = sqlite3.connect(config.DB_PATH)
     con.row_factory = sqlite3.Row
     import sqlite_vec
-    con.enable_load_extension(True)
+    try:
+        con.enable_load_extension(True)
+    except AttributeError:
+        raise RuntimeError(
+            "Python was built without SQLite extension support. "
+            "Reinstall with: PYTHON_CONFIGURE_OPTS='--enable-loadable-sqlite-extensions' "
+            "pyenv install --force 3.10.0"
+        ) from None
     sqlite_vec.load(con)
     con.enable_load_extension(False)
     return con
