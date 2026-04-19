@@ -89,13 +89,16 @@ def list_cmd(tag: str, limit: int) -> None:
 
 
 @main.command("index")
-def index_cmd() -> None:
+@click.option("--force", is_flag=True, default=False,
+              help="Reindex all files even if unchanged")
+def index_cmd(force: bool) -> None:
     """One-shot index of the current codebase."""
     from .ingest import code as code_ingest
     cwd = Path.cwd()
-    project = str(cwd)
-    count = code_ingest.ingest_codebase(cwd, project=project)
-    click.echo(f"indexed {count} chunks from {cwd}")
+    added, skipped = code_ingest.ingest_codebase(
+        cwd, project=str(cwd), incremental=not force
+    )
+    click.echo(f"indexed {added} new chunks ({skipped} files unchanged)")
 
 
 @main.command("watch")

@@ -46,6 +46,18 @@ def list_memories(tag: str = "", limit: int = 20) -> list[dict]:
     return [m.to_dict() for m in memories]
 
 
+@mcp.tool()
+def index_codebase(force: bool = False) -> str:
+    """Index (or incrementally update) the current project codebase.
+    Set force=True to reindex all files even if unchanged."""
+    init_db()
+    from .ingest import code as code_ingest
+    added, skipped = code_ingest.ingest_codebase(
+        Path.cwd(), project=str(Path.cwd()), incremental=not force
+    )
+    return f"indexed {added} new chunks ({skipped} files unchanged)"
+
+
 def serve() -> None:
     init_db()
     mcp.run()

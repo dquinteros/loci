@@ -15,8 +15,11 @@ pip install -e .
 # Register loci as an MCP server + hooks in ~/.claude/settings.json
 loci install
 
-# Index the current codebase into memory
+# Index the current codebase into memory (incremental by default)
 loci index
+
+# Force full reindex of all files regardless of mtime
+loci index --force
 
 # Watch ~/loci-docs for file changes and auto-ingest
 loci watch
@@ -66,7 +69,7 @@ User/Claude Code
 | `loci/embedder.py` | Wraps FastEmbed (`BAAI/bge-small-en-v1.5`, 384-dim) — singleton model |
 | `loci/chunker.py` | Recursive character text splitter (default 1024 chars) |
 | `loci/retriever.py` | Hybrid search: vector ANN + FTS5 keyword, merged via reciprocal rank fusion |
-| `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories` tools |
+| `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase` tools |
 | `loci/config.py` | All constants (paths, thresholds, model name, extensions) |
 | `loci/ingest/` | Source-specific ingestion: `code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py` |
 
@@ -91,3 +94,4 @@ Single SQLite DB at `~/.loci/memories.db` (overridable via `LOCI_DB_PATH`):
 - **Project scoping:** memories are keyed to the git repo root (or CWD), so `recall` only returns relevant project context by default
 - **Hybrid retrieval:** RRF merges vector and keyword rankings — neither alone is used; both contribute
 - **Embedding model is a singleton:** loaded once in `embedder.py`, shared across the process to avoid reload overhead
+- **Incremental indexing:** `ingest_codebase()` compares `st_mtime` against `MAX(created_at)` per file; unchanged files are skipped. `--force` / `force=True` bypasses this check and replaces all chunks.

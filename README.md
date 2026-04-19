@@ -61,6 +61,13 @@ loci index
 
 This walks the directory, chunks all source files (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.tsx`, `.jsx`, `.rb`, `.cpp`, `.c`, `.h`), and stores them with vector embeddings. Duplicates (cosine similarity ≥ 0.95) are skipped automatically.
 
+**Incremental indexing** — by default, `loci index` skips files whose modification time hasn't changed since they were last indexed. Re-runs are fast and safe to call frequently. Use `--force` to reindex everything:
+
+```bash
+loci index          # only changed files (default)
+loci index --force  # reindex all files unconditionally
+```
+
 ---
 
 ## CLI Reference
@@ -151,8 +158,9 @@ When Claude Code is connected via MCP, these tools are available in any conversa
 | `recall(query, k)` | Retrieve the most relevant memories |
 | `forget(id)` | Delete a memory by ID |
 | `list_memories(tag, limit)` | List project memories, optionally filtered by tag |
+| `index_codebase(force)` | Index (or incrementally update) the current project codebase |
 
-Claude uses `recall` and `remember` automatically — you don't need to ask it to.
+Claude uses `recall` and `remember` automatically — you don't need to ask it to. You can also ask Claude to run `index_codebase` mid-session to pick up new files without leaving the conversation.
 
 ---
 

@@ -166,6 +166,18 @@ def delete_stale(source_ref: str) -> None:
         con.close()
 
 
+def last_indexed(source_ref: str) -> float | None:
+    con = _connect()
+    try:
+        row = con.execute(
+            "SELECT MAX(created_at) FROM memories WHERE source_ref = ?",
+            (source_ref,),
+        ).fetchone()
+        return row[0] if row and row[0] is not None else None
+    finally:
+        con.close()
+
+
 def vector_search(
     emb: np.ndarray, k: int = config.TOP_K, project: str | None = None
 ) -> list[tuple[str, float]]:

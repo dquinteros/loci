@@ -46,10 +46,15 @@ def ingest_file(path: str | Path, project: str = "") -> int:
     return count
 
 
-def ingest_codebase(cwd: str | Path, project: str = "") -> int:
+def ingest_codebase(
+    cwd: str | Path,
+    project: str = "",
+    incremental: bool = True,
+) -> tuple[int, int]:  # (chunks_added, files_skipped)
     cwd = Path(cwd)
     patterns = _load_gitignore(cwd)
     total = 0
+    skipped = 0
     for path in cwd.rglob("*"):
         if not path.is_file():
             continue
@@ -59,5 +64,20 @@ def ingest_codebase(cwd: str | Path, project: str = "") -> int:
             continue
         if any(part.startswith(".") for part in path.parts):
             continue
-        total += ingest_file(path, project=project)
-    return total
+
+        if incremental:
+            last = store.last_indexed(str(path))
+            if last is not None and path.stat().st_mtime <= last:
+                skipped += 1
+                continue
+            if last is not None:
+                store.mark_stale(str(path))
+            total += ingest_file(path, project=project)
+            if last is not None:
+                store.delete_stale(str(path))
+        else:
+            store.mark_stale(str(path))
+            total += ingest_file(path, project=project)
+            store.delete_stale(str(path))
+
+    return total, skipped
