@@ -116,6 +116,8 @@ def init_db() -> None:
             VALUES('delete', old.rowid, old.content, old.tags);
         END;
 
+        CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
+
         CREATE TABLE IF NOT EXISTS project_refs (
             src_project TEXT NOT NULL,
             dst_project TEXT NOT NULL,
@@ -139,7 +141,7 @@ def insert(
     tags = tags or []
     emb = embed([content])[0]
 
-    hits = vector_search(emb, k=1, project=None)
+    hits = vector_search(emb, k=1, project=project or None)
     if hits:
         top_id, top_score = hits[0]
         if top_score >= config.DEDUP_COS:
@@ -176,41 +178,59 @@ def insert_batch(chunks: list[ChunkInput]) -> list[str | None]:
 
     con = _connect()
 
-    existing_rows = con.execute(
-        "SELECT rowid, embedding FROM memories_vec"
-    ).fetchall()
+    from collections import defaultdict
+
+    project_groups: dict[str, list[int]] = defaultdict(list)
+    for i, c in enumerate(chunks):
+        project_groups[c.project].append(i)
 
     is_dup = np.zeros(len(chunks), dtype=bool)
 
-    if existing_rows:
-        n_existing = len(existing_rows)
-        if n_existing > 100_000:
-            for i, emb in enumerate(embeddings):
-                hits = vector_search(emb, k=1, project=None)
-                if hits and hits[0][1] >= config.DEDUP_COS:
-                    is_dup[i] = True
+    for proj, indices in project_groups.items():
+        if proj:
+            existing_rows = con.execute(
+                "SELECT v.rowid, v.embedding FROM memories_vec v"
+                " JOIN memories m ON m.rowid = v.rowid"
+                " WHERE m.project = ?",
+                (proj,),
+            ).fetchall()
         else:
-            existing_embs = np.stack([
-                np.frombuffer(r["embedding"], dtype=np.float32)
-                for r in existing_rows
-            ])
-            cos_sims = embeddings @ existing_embs.T
-            l2_dists = np.sqrt(np.maximum(0.0, 2.0 - 2.0 * cos_sims))
-            scores = 1.0 - l2_dists
-            max_scores = scores.max(axis=1)
-            is_dup = max_scores >= config.DEDUP_COS
+            existing_rows = con.execute(
+                "SELECT rowid, embedding FROM memories_vec"
+            ).fetchall()
 
-    # intra-batch dedup
-    for i in range(len(chunks)):
-        if is_dup[i]:
-            continue
-        for j in range(i + 1, len(chunks)):
-            if is_dup[j]:
+        if existing_rows:
+            n_existing = len(existing_rows)
+            if n_existing > 100_000:
+                for idx in indices:
+                    hits = vector_search(embeddings[idx], k=1, project=proj or None)
+                    if hits and hits[0][1] >= config.DEDUP_COS:
+                        is_dup[idx] = True
+            else:
+                existing_embs = np.stack([
+                    np.frombuffer(r["embedding"], dtype=np.float32)
+                    for r in existing_rows
+                ])
+                group_embs = embeddings[indices]
+                cos_sims = group_embs @ existing_embs.T
+                l2_dists = np.sqrt(np.maximum(0.0, 2.0 - 2.0 * cos_sims))
+                scores = 1.0 - l2_dists
+                max_scores = scores.max(axis=1)
+                for local_i, global_i in enumerate(indices):
+                    if max_scores[local_i] >= config.DEDUP_COS:
+                        is_dup[global_i] = True
+
+        for local_i, global_i in enumerate(indices):
+            if is_dup[global_i]:
                 continue
-            cos_sim = float(embeddings[i] @ embeddings[j])
-            l2_dist = (max(0.0, 2.0 - 2.0 * cos_sim)) ** 0.5
-            if (1.0 - l2_dist) >= config.DEDUP_COS:
-                is_dup[j] = True
+            for local_j in range(local_i + 1, len(indices)):
+                global_j = indices[local_j]
+                if is_dup[global_j]:
+                    continue
+                cos_sim = float(embeddings[global_i] @ embeddings[global_j])
+                l2_dist = (max(0.0, 2.0 - 2.0 * cos_sim)) ** 0.5
+                if (1.0 - l2_dist) >= config.DEDUP_COS:
+                    is_dup[global_j] = True
 
     results: list[str | None] = []
     now = time()
