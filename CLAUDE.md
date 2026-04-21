@@ -61,7 +61,7 @@ loci index-ref ../other-project --force
 loci serve
 ```
 
-No test suite or linter config exists yet. When adding tests, use pytest.
+Tests use pytest: `pytest tests/ -v`. Dev dependencies: `pip install -e ".[dev]"`
 
 ## Architecture
 
@@ -87,7 +87,8 @@ User/Claude Code
 
 | Module | Responsibility |
 |--------|---------------|
-| `loci/store.py` | SQLite schema, CRUD, FTS5 index, sqlite-vec vector index, deduplication, batch insert, thread-local connection pool |
+| `loci/store.py` | CRUD, FTS5 index, sqlite-vec vector index, deduplication, batch insert, thread-local connection pool |
+| `loci/migrations/` | Numbered schema migrations (`0001_initial.py`, etc.) with version tracking in `_schema_version` table |
 | `loci/embedder.py` | Wraps FastEmbed (`BAAI/bge-small-en-v1.5`, 384-dim) — singleton model |
 | `loci/chunker.py` | Recursive character text splitter (default 1024 chars, code uses 2048) |
 | `loci/refs.py` | Cross-project reference graph: CRUD + BFS resolver for multi-project search |
@@ -126,7 +127,7 @@ MCP tools: `add_ref`, `remove_ref`, `list_refs`, `index_ref`.
 
 - **Thread-local connection pool:** `store._connect()` caches one SQLite connection per thread in `threading.local()`, eliminating per-call `sqlite-vec` extension loading overhead (~6.6ms each). Thread-local (not a plain global) because `watchdog` observer threads call store functions concurrently. An `atexit` handler closes connections on exit.
 - **Batch insert:** `store.insert_batch()` accepts a list of `ChunkInput` and: (1) embeds all texts in one `embed()` call, (2) fetches all existing vectors and computes a similarity matrix for dedup (falls back to per-chunk ANN if >100K existing vectors), (3) performs intra-batch dedup, (4) inserts all non-duplicate chunks in a single transaction. All ingest callers (`code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py`, `cli.py import`) use `insert_batch()`. The original `insert()` is kept for single-item callers (MCP `remember`, CLI `add`, hooks).
-- **Deduplication threshold:** cosine similarity ≥ 0.95 skips storing duplicate chunks (`store.py`). The dedup metric is `1 - L2_distance` (not raw cosine), matching `vector_search()` scoring.
+- **Deduplication threshold:** score ≥ 0.95 skips storing duplicate chunks (`store.py`). The dedup metric is `1 - L2_distance`, matching `vector_search()` scoring. Per-project dedup uses a stricter 0.99 threshold to reduce false positives within the same project.
 - **Project scoping:** memories are keyed to the git repo root (or CWD), so `recall` only returns relevant project context by default. Cross-project references extend this to include referenced projects with a 0.7× RRF weight penalty.
 - **Hybrid retrieval:** RRF merges vector and keyword rankings using `1/(rank+60)` — neither alone is used; both contribute
 - **Embedding model is a singleton:** loaded once in `embedder.py`, shared across the process to avoid reload overhead
@@ -135,4 +136,6 @@ MCP tools: `add_ref`, `remove_ref`, `list_refs`, `index_ref`.
 - **Directory pruning:** `ingest/code.py` uses `os.walk` (not `rglob`) with in-place `dirnames` pruning. Directories in `config.SKIP_DIRS` (e.g. `node_modules`, `venv`, `__pycache__`, `build`, `dist`) and hidden directories are never descended into, avoiding expensive enumeration of large dependency trees.
 - **Gitignore awareness:** `ingest/code.py` uses `pathspec` (gitwildmatch) to match `.gitignore` patterns, supporting directory patterns (`node_modules/`), `**` globs, and negation — unlike the previous `fnmatch` approach which couldn't match directory-style patterns.
 - **Idempotent install/uninstall:** `loci install` uses a `/.loci/hooks/` marker in hook command strings to identify its own entries. It strips any existing loci hooks before appending fresh ones, so re-running never duplicates. `loci uninstall` uses the same marker to selectively remove loci entries without touching other hooks.
+- **WAL mode + busy_timeout:** Connections use `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=5000` for safe concurrent access (e.g. hooks firing during indexing).
+- **Schema migrations:** `loci/migrations/` contains numbered migration files. `init_db()` runs pending migrations via a `_schema_version` table, so schema changes in future releases apply automatically to existing databases.
 - **SQLite extension requirement:** `sqlite-vec` needs Python built with `--enable-loadable-sqlite-extensions`. On macOS the system SQLite lacks this, so the install script (`install.sh`) installs Homebrew SQLite and links Python against it. `store.py` raises a clear `RuntimeError` if the capability is missing at runtime.

@@ -13,9 +13,27 @@ try:
 
     init_db()
     project = os.getcwd()
-    memories = retriever.hybrid_search(
-        "project context conventions important facts", k=5, project=project
-    )
+
+    categories = [
+        {"query": "session summary decisions progress", "k": 3, "source": "session"},
+        {"query": "project architecture conventions facts", "k": 3, "source": "manual"},
+        {"query": "important functions main components", "k": 3, "source": "code"},
+    ]
+
+    seen_ids: set[str] = set()
+    memories: list[store.Memory] = []
+    for cat in categories:
+        hits = retriever.hybrid_search(
+            cat["query"], k=cat["k"], project=project,
+            source=cat["source"],
+        )
+        for m in hits:
+            if m.id not in seen_ids:
+                seen_ids.add(m.id)
+                memories.append(m)
+
+    memories = memories[:5]
+
     if memories:
         print("<loci-context>")
         for m in memories:

@@ -52,6 +52,8 @@ def _connect() -> sqlite3.Connection:
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(config.DB_PATH)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=5000")
     import sqlite_vec
     try:
         con.enable_load_extension(True)
@@ -82,50 +84,9 @@ atexit.register(close)
 
 
 def init_db() -> None:
+    from . import migrations
     con = _connect()
-    con.executescript("""
-        CREATE TABLE IF NOT EXISTS memories (
-            id          TEXT PRIMARY KEY,
-            content     TEXT NOT NULL,
-            tags        TEXT DEFAULT '[]',
-            project     TEXT,
-            source      TEXT,
-            source_ref  TEXT,
-            chunk_idx   INTEGER DEFAULT 0,
-            created_at  REAL,
-            is_stale    INTEGER DEFAULT 0
-        );
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-            content, tags, content=memories, content_rowid=rowid
-        );
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
-            embedding float[384]
-        );
-
-        CREATE TRIGGER IF NOT EXISTS memories_ai
-        AFTER INSERT ON memories BEGIN
-            INSERT INTO memories_fts(rowid, content, tags)
-            VALUES (new.rowid, new.content, new.tags);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS memories_ad
-        AFTER DELETE ON memories BEGIN
-            INSERT INTO memories_fts(memories_fts, rowid, content, tags)
-            VALUES('delete', old.rowid, old.content, old.tags);
-        END;
-
-        CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
-
-        CREATE TABLE IF NOT EXISTS project_refs (
-            src_project TEXT NOT NULL,
-            dst_project TEXT NOT NULL,
-            created_at  REAL NOT NULL,
-            PRIMARY KEY (src_project, dst_project)
-        );
-    """)
-    con.commit()
+    migrations.run_pending(con)
 
 
 def insert(
@@ -144,7 +105,8 @@ def insert(
     hits = vector_search(emb, k=1, project=project or None)
     if hits:
         top_id, top_score = hits[0]
-        if top_score >= config.DEDUP_COS:
+        threshold = config.DEDUP_THRESHOLD_INTRA if project else config.DEDUP_THRESHOLD
+        if top_score >= threshold:
             return None
 
     memory_id = str(uuid.uuid4())
@@ -191,7 +153,7 @@ def insert_batch(chunks: list[ChunkInput]) -> list[str | None]:
             existing_rows = con.execute(
                 "SELECT v.rowid, v.embedding FROM memories_vec v"
                 " JOIN memories m ON m.rowid = v.rowid"
-                " WHERE m.project = ?",
+                " WHERE m.project = ? AND m.is_stale = 0",
                 (proj,),
             ).fetchall()
         else:
@@ -204,7 +166,8 @@ def insert_batch(chunks: list[ChunkInput]) -> list[str | None]:
             if n_existing > 100_000:
                 for idx in indices:
                     hits = vector_search(embeddings[idx], k=1, project=proj or None)
-                    if hits and hits[0][1] >= config.DEDUP_COS:
+                    threshold = config.DEDUP_THRESHOLD_INTRA if proj else config.DEDUP_THRESHOLD
+                    if hits and hits[0][1] >= threshold:
                         is_dup[idx] = True
             else:
                 existing_embs = np.stack([
@@ -216,8 +179,9 @@ def insert_batch(chunks: list[ChunkInput]) -> list[str | None]:
                 l2_dists = np.sqrt(np.maximum(0.0, 2.0 - 2.0 * cos_sims))
                 scores = 1.0 - l2_dists
                 max_scores = scores.max(axis=1)
+                threshold = config.DEDUP_THRESHOLD_INTRA if proj else config.DEDUP_THRESHOLD
                 for local_i, global_i in enumerate(indices):
-                    if max_scores[local_i] >= config.DEDUP_COS:
+                    if max_scores[local_i] >= threshold:
                         is_dup[global_i] = True
 
         for local_i, global_i in enumerate(indices):
@@ -229,7 +193,8 @@ def insert_batch(chunks: list[ChunkInput]) -> list[str | None]:
                     continue
                 cos_sim = float(embeddings[global_i] @ embeddings[global_j])
                 l2_dist = (max(0.0, 2.0 - 2.0 * cos_sim)) ** 0.5
-                if (1.0 - l2_dist) >= config.DEDUP_COS:
+                intra_threshold = config.DEDUP_THRESHOLD_INTRA if proj else config.DEDUP_THRESHOLD
+                if (1.0 - l2_dist) >= intra_threshold:
                     is_dup[global_j] = True
 
     results: list[str | None] = []
@@ -304,6 +269,8 @@ def vector_search(
     k: int = config.TOP_K,
     project: str | None = None,
     projects: list[str] | None = None,
+    source: str | None = None,
+    tags: list[str] | None = None,
 ) -> list[tuple[str, float]]:
     allowed = set(projects) if projects else ({project} if project else None)
     emb_bytes = emb.astype(np.float32).tobytes()
@@ -317,9 +284,18 @@ def vector_search(
     rowids = [r["rowid"] for r in rows]
     dist_map = {r["rowid"]: r["distance"] for r in rows}
 
-    placeholders = ",".join("?" * len(rowids))
-    query = f"SELECT id, rowid, project FROM memories WHERE rowid IN ({placeholders})"
-    mem_rows = con.execute(query, rowids).fetchall()
+    conditions = [f"rowid IN ({','.join('?' * len(rowids))})", "is_stale = 0"]
+    params: list = list(rowids)
+    if source:
+        conditions.append("source = ?")
+        params.append(source)
+    if tags:
+        tag_clauses = " OR ".join(["tags LIKE ?"] * len(tags))
+        conditions.append(f"({tag_clauses})")
+        params.extend(f'%"{t}"%' for t in tags)
+
+    query = f"SELECT id, rowid, project FROM memories WHERE {' AND '.join(conditions)}"
+    mem_rows = con.execute(query, params).fetchall()
 
     results = []
     for mr in mem_rows:
@@ -337,16 +313,29 @@ def fts_search(
     k: int = config.TOP_K,
     project: str | None = None,
     projects: list[str] | None = None,
+    source: str | None = None,
+    tags: list[str] | None = None,
 ) -> list[tuple[str, float]]:
     allowed = set(projects) if projects else ({project} if project else None)
     con = _connect()
-    rows = con.execute(
+
+    fts_query = (
         "SELECT m.id, m.project, rank FROM memories_fts f"
         " JOIN memories m ON m.rowid = f.rowid"
-        " WHERE memories_fts MATCH ?"
-        " ORDER BY rank LIMIT ?",
-        (query, k * 3 if allowed else k),
-    ).fetchall()
+        " WHERE memories_fts MATCH ? AND m.is_stale = 0"
+    )
+    params: list = [query]
+    if source:
+        fts_query += " AND m.source = ?"
+        params.append(source)
+    if tags:
+        tag_clauses = " OR ".join(["m.tags LIKE ?"] * len(tags))
+        fts_query += f" AND ({tag_clauses})"
+        params.extend(f'%"{t}"%' for t in tags)
+    fts_query += " ORDER BY rank LIMIT ?"
+    params.append(k * 3 if allowed else k)
+
+    rows = con.execute(fts_query, params).fetchall()
     results = []
     for row in rows:
         if allowed and row["project"] not in allowed:
@@ -414,3 +403,146 @@ def list_memories(
         )
         for r in rows
     ]
+
+
+def upsert_file_index(
+    project: str,
+    file_path: str,
+    content_hash: str,
+    symbols: str,
+    line_count: int,
+    embedding: np.ndarray,
+) -> bool:
+    """Upsert a file_index entry. Returns True if changed, False if skipped (hash match)."""
+    con = _connect()
+    existing = con.execute(
+        "SELECT id, content_hash FROM file_index WHERE project=? AND file_path=?",
+        (project, file_path),
+    ).fetchone()
+
+    if existing and existing["content_hash"] == content_hash:
+        return False
+
+    emb_bytes = embedding.astype(np.float32).tobytes()
+    now = time()
+
+    if existing:
+        fid = existing["id"]
+        con.execute(
+            "UPDATE file_index SET content_hash=?, symbols=?, line_count=?, indexed_at=?"
+            " WHERE id=?",
+            (content_hash, symbols, line_count, now, fid),
+        )
+        con.execute(
+            "UPDATE file_index_vec SET embedding=? WHERE rowid=?", (emb_bytes, fid)
+        )
+    else:
+        con.execute(
+            "INSERT INTO file_index(project, file_path, content_hash, symbols, line_count, indexed_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (project, file_path, content_hash, symbols, line_count, now),
+        )
+        fid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        con.execute(
+            "INSERT INTO file_index_vec(rowid, embedding) VALUES (?,?)",
+            (fid, emb_bytes),
+        )
+
+    con.commit()
+    return True
+
+
+def cleanup_deleted_files(project: str, existing_paths: set[str]) -> int:
+    """Remove chunks + file_index entries for files no longer on disk."""
+    con = _connect()
+
+    mem_refs = {
+        r["source_ref"]
+        for r in con.execute(
+            "SELECT DISTINCT source_ref FROM memories WHERE project=? AND source='code'",
+            (project,),
+        ).fetchall()
+    }
+    fi_refs = {
+        r["file_path"]
+        for r in con.execute(
+            "SELECT file_path FROM file_index WHERE project=?", (project,)
+        ).fetchall()
+    }
+    deleted_refs = (mem_refs | fi_refs) - existing_paths
+    if not deleted_refs:
+        return 0
+
+    for ref in deleted_refs:
+        chunk_rows = con.execute(
+            "SELECT rowid FROM memories WHERE project=? AND source_ref=?",
+            (project, ref),
+        ).fetchall()
+        for cr in chunk_rows:
+            con.execute("DELETE FROM memories_vec WHERE rowid=?", (cr["rowid"],))
+        con.execute(
+            "DELETE FROM memories WHERE project=? AND source_ref=?", (project, ref)
+        )
+
+        fi = con.execute(
+            "SELECT id FROM file_index WHERE project=? AND file_path=?",
+            (project, ref),
+        ).fetchone()
+        if fi:
+            con.execute("DELETE FROM file_index_vec WHERE rowid=?", (fi["id"],))
+            con.execute("DELETE FROM file_index WHERE id=?", (fi["id"],))
+
+    con.commit()
+    return len(deleted_refs)
+
+
+def file_index_search(
+    emb: np.ndarray,
+    k: int = config.TOP_K,
+    project: str | None = None,
+) -> list[tuple[str, str, float]]:
+    """Returns [(file_path, symbols, score), ...]."""
+    con = _connect()
+    emb_bytes = emb.astype(np.float32).tobytes()
+    rows = con.execute(
+        "SELECT rowid, distance FROM file_index_vec WHERE embedding MATCH ? AND k=?",
+        (emb_bytes, k * 2 if project else k),
+    ).fetchall()
+    if not rows:
+        return []
+    rowids = [r["rowid"] for r in rows]
+    dist_map = {r["rowid"]: r["distance"] for r in rows}
+
+    placeholders = ",".join("?" * len(rowids))
+    fi_rows = con.execute(
+        f"SELECT id, file_path, symbols, project FROM file_index WHERE id IN ({placeholders})",
+        rowids,
+    ).fetchall()
+
+    results = []
+    for fr in fi_rows:
+        if project and fr["project"] != project:
+            continue
+        score = max(0.0, 1.0 - dist_map[fr["id"]])
+        results.append((fr["file_path"], fr["symbols"], score))
+    results.sort(key=lambda x: x[2], reverse=True)
+    return results[:k]
+
+
+def get_chunk_ids_for_files(
+    file_paths: list[str], project: str
+) -> dict[str, list[str]]:
+    """Return {source_ref: [memory_id, ...]} for given files."""
+    if not file_paths:
+        return {}
+    con = _connect()
+    placeholders = ",".join("?" * len(file_paths))
+    rows = con.execute(
+        f"SELECT id, source_ref FROM memories"
+        f" WHERE project=? AND source_ref IN ({placeholders}) AND is_stale=0",
+        [project] + file_paths,
+    ).fetchall()
+    result: dict[str, list[str]] = {}
+    for r in rows:
+        result.setdefault(r["source_ref"], []).append(r["id"])
+    return result

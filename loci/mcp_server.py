@@ -23,10 +23,13 @@ def remember(content: str, tags: list[str] = [], project: str = "") -> str:
 
 
 @mcp.tool()
-def recall(query: str, k: int = 5) -> list[dict]:
-    """Retrieve the most relevant memories for a query."""
+def recall(query: str, k: int = 5, source: str = "", tags: list[str] = []) -> list[dict]:
+    """Retrieve the most relevant memories for a query. Optionally filter by source type or tags."""
     init_db()
-    memories = retriever.hybrid_search(query, k=k, project=str(Path.cwd()))
+    memories = retriever.hybrid_search(
+        query, k=k, project=str(Path.cwd()),
+        source=source or None, tags=tags or None,
+    )
     return [m.to_dict() for m in memories]
 
 
@@ -95,6 +98,19 @@ def index_ref(target_project: str, force: bool = False) -> str:
         resolved, project=str(resolved), incremental=not force
     )
     return f"indexed {added} new chunks from {resolved} ({skipped} files unchanged)"
+
+
+@mcp.tool()
+def find_files(query: str, k: int = 10) -> list[dict]:
+    """Find project files by name or symbol. Returns file paths, symbols, and relevance scores."""
+    init_db()
+    from .embedder import embed
+    q_emb = embed([query])[0]
+    hits = store.file_index_search(q_emb, k=k, project=str(Path.cwd()))
+    return [
+        {"file_path": fp, "symbols": syms, "score": round(sc, 3)}
+        for fp, syms, sc in hits
+    ]
 
 
 def serve() -> None:

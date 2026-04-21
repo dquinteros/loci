@@ -32,6 +32,10 @@ try:
     if not path.exists() or not path.is_file():
         sys.exit(0)
 
+    loci_home = Path.home() / ".loci"
+    if path.resolve().is_relative_to(loci_home):
+        sys.exit(0)
+
     from loci import store, config
     from loci.store import init_db
     from loci.ingest import code as code_ingest
