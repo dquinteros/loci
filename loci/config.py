@@ -17,7 +17,9 @@ SOURCE_BOOST = {
     "pdf": 1.0,
 }
 RECENCY_DECAY = 0.0001
-CHUNK_SIZE   = 1024
+CHUNK_SIZE    = 1024
+CHUNK_OVERLAP = 200
+MAX_FILE_SIZE = 1_000_000
 
 SKIP_DIRS: frozenset[str] = frozenset({
     "node_modules", "__pycache__", ".git", ".hg", ".svn",

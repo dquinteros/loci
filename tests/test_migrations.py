@@ -47,10 +47,11 @@ def test_init_db_creates_memories_table(_isolated_db):
 def test_init_db_is_idempotent(_isolated_db):
     from loci.store import init_db, _connect
     init_db()
-    init_db()
     con = _connect()
-    versions = con.execute("SELECT version FROM _schema_version").fetchall()
-    assert len(versions) == 1
+    count_before = con.execute("SELECT COUNT(*) FROM _schema_version").fetchone()[0]
+    init_db()
+    count_after = con.execute("SELECT COUNT(*) FROM _schema_version").fetchone()[0]
+    assert count_before == count_after
 
 
 def test_migration_runner_skips_applied(tmp_path, monkeypatch):

@@ -3,8 +3,12 @@ from . import config
 SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
 
 
-def chunk(text: str, size: int = config.CHUNK_SIZE) -> list[str]:
-    """Recursive character splitter — best retrieval accuracy per 2026 benchmark."""
+def chunk(
+    text: str,
+    size: int = config.CHUNK_SIZE,
+    overlap: int = config.CHUNK_OVERLAP,
+) -> list[str]:
+    """Recursive character splitter with overlap between adjacent chunks."""
     if not text or not text.strip():
         return []
     if len(text) <= size:
@@ -21,8 +25,12 @@ def chunk(text: str, size: int = config.CHUNK_SIZE) -> list[str]:
                 else:
                     if current:
                         chunks.append(current.strip())
-                    current = part
+                    if overlap and chunks:
+                        tail = chunks[-1][-overlap:]
+                        current = tail + sep + part if tail else part
+                    else:
+                        current = part
             if current:
                 chunks.append(current.strip())
             return [c for c in chunks if c]
-    return [text[i : i + size] for i in range(0, len(text), size)]
+    return [text[i : i + size] for i in range(0, len(text), max(1, size - overlap))]

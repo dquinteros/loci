@@ -1,4 +1,5 @@
 from __future__ import annotations
+import sys
 from pathlib import Path
 
 from .. import store
@@ -11,6 +12,13 @@ def ingest(path: str | Path, project: str = "") -> int:
     path = Path(path)
     reader = PdfReader(str(path))
     text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
+    if not text.strip():
+        print(
+            f"[loci] warning: no text extracted from {path}. "
+            f"PDF may be scanned/image-based.",
+            file=sys.stderr,
+        )
+        return 0
     chunks_text = chunk(text)
     chunks_input = [
         store.ChunkInput(

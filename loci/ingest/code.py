@@ -23,13 +23,17 @@ def _is_ignored(path: Path, spec: pathspec.PathSpec, cwd: Path) -> bool:
 
 _SYMBOL_PATTERNS: dict[str, str] = {
     ".py": r"(?:def|class)\s+(\w+)",
-    ".ts": r"(?:function|class|const|export\s+(?:default\s+)?(?:function|class|const))\s+(\w+)",
-    ".tsx": r"(?:function|class|const|export\s+(?:default\s+)?(?:function|class|const))\s+(\w+)",
+    ".ts": r"(?:function|class|const|type|interface|export\s+(?:default\s+)?(?:function|class|const|type|interface))\s+(\w+)",
+    ".tsx": r"(?:function|class|const|type|interface|export\s+(?:default\s+)?(?:function|class|const|type|interface))\s+(\w+)",
     ".js": r"(?:function|class|const|export\s+(?:default\s+)?(?:function|class|const))\s+(\w+)",
     ".jsx": r"(?:function|class|const|export\s+(?:default\s+)?(?:function|class|const))\s+(\w+)",
-    ".go": r"(?:func|type)\s+(\w+)",
-    ".rs": r"(?:fn|struct|enum|trait|impl)\s+(\w+)",
-    ".java": r"(?:class|interface|enum)\s+(\w+)",
+    ".go": r"(?:func|type|var)\s+(\w+)",
+    ".rs": r"(?:fn|struct|enum|trait|impl|mod|type)\s+(\w+)",
+    ".java": r"(?:class|interface|enum|record|@interface)\s+(\w+)",
+    ".rb": r"(?:def|class|module)\s+(\w+)",
+    ".cpp": r"(?:class|struct|enum|namespace|void|int|bool|auto)\s+(\w+)\s*(?:\(|{|:)",
+    ".c": r"(?:struct|enum|union|void|int|char|float|double)\s+(\w+)\s*(?:\(|{|;)",
+    ".h": r"(?:struct|enum|union|class|void|int|char|float|double)\s+(\w+)\s*(?:\(|{|;)",
 }
 
 
@@ -38,6 +42,9 @@ def _extract_symbols(text: str, suffix: str) -> str:
         suffix, r"(?:def|class|function|fn|struct)\s+(\w+)"
     )
     symbols = re.findall(pattern, text)
+    if suffix == ".py":
+        decorated = re.findall(r"@\w+[\s\S]*?(?:def|class)\s+(\w+)", text)
+        symbols.extend(decorated)
     return ", ".join(dict.fromkeys(symbols))
 
 
@@ -45,6 +52,8 @@ def collect_file_chunks(path: Path, project: str = "") -> list[store.ChunkInput]
     if path.suffix not in config.CODE_EXTENSIONS:
         return []
     try:
+        if path.stat().st_size > config.MAX_FILE_SIZE:
+            return []
         text = path.read_text(errors="replace")
     except OSError:
         return []
@@ -101,6 +110,13 @@ def ingest_codebase(
                 continue
 
             seen_paths.add(str(path))
+
+            try:
+                if path.stat().st_size > config.MAX_FILE_SIZE:
+                    skipped += 1
+                    continue
+            except OSError:
+                continue
 
             if incremental:
                 last = store.last_indexed(str(path))

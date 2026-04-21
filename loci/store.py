@@ -87,6 +87,37 @@ def init_db() -> None:
     from . import migrations
     con = _connect()
     migrations.run_pending(con)
+    _check_model_version(con)
+
+
+def _check_model_version(con: sqlite3.Connection) -> None:
+    try:
+        row = con.execute(
+            "SELECT value FROM _metadata WHERE key = 'embed_model'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return
+    if row is None:
+        con.execute(
+            "INSERT OR REPLACE INTO _metadata (key, value) VALUES ('embed_model', ?)",
+            (config.EMBED_MODEL,),
+        )
+        con.commit()
+        return
+    stored_model = row[0]
+    if stored_model != config.EMBED_MODEL:
+        import sys
+        print(
+            f"[loci] warning: embedding model changed from '{stored_model}' to "
+            f"'{config.EMBED_MODEL}'. Existing vectors are incompatible. "
+            f"Run 'loci index --force' to reindex.",
+            file=sys.stderr,
+        )
+        con.execute(
+            "INSERT OR REPLACE INTO _metadata (key, value) VALUES ('embed_model', ?)",
+            (config.EMBED_MODEL,),
+        )
+        con.commit()
 
 
 def insert(
@@ -290,9 +321,11 @@ def vector_search(
         conditions.append("source = ?")
         params.append(source)
     if tags:
-        tag_clauses = " OR ".join(["tags LIKE ?"] * len(tags))
+        tag_clauses = " OR ".join(
+            ["EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)"] * len(tags)
+        )
         conditions.append(f"({tag_clauses})")
-        params.extend(f'%"{t}"%' for t in tags)
+        params.extend(tags)
 
     query = f"SELECT id, rowid, project FROM memories WHERE {' AND '.join(conditions)}"
     mem_rows = con.execute(query, params).fetchall()
@@ -329,9 +362,11 @@ def fts_search(
         fts_query += " AND m.source = ?"
         params.append(source)
     if tags:
-        tag_clauses = " OR ".join(["m.tags LIKE ?"] * len(tags))
+        tag_clauses = " OR ".join(
+            ["EXISTS (SELECT 1 FROM json_each(m.tags) WHERE value = ?)"] * len(tags)
+        )
         fts_query += f" AND ({tag_clauses})"
-        params.extend(f'%"{t}"%' for t in tags)
+        params.extend(tags)
     fts_query += " ORDER BY rank LIMIT ?"
     params.append(k * 3 if allowed else k)
 
@@ -381,8 +416,8 @@ def list_memories(
         conditions.append("project=?")
         params.append(project)
     if tag:
-        conditions.append("tags LIKE ?")
-        params.append(f'%"{tag}"%')
+        conditions.append("EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)")
+        params.append(tag)
     params.append(limit)
     rows = con.execute(
         f"SELECT * FROM memories WHERE {' AND '.join(conditions)}"
