@@ -69,6 +69,9 @@ class CodeWatcher(FileSystemEventHandler):
         if code_ingest._is_ignored(path, self._patterns, self.cwd):
             return
         now = time.time()
+        CodeWatcher._debounce = {
+            k: v for k, v in self._debounce.items() if now - v < 60
+        }
         last = self._debounce.get(str(path), 0.0)
         if now - last < self.DEBOUNCE_SECS:
             return

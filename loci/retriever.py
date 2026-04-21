@@ -67,7 +67,6 @@ def hybrid_search(
     _apply_boosts(scores, all_mems)
 
     top_ids = sorted(scores, key=scores.__getitem__, reverse=True)[:k]
-    id_set = set(top_ids)
     ordered = [m for mid in top_ids for m in all_mems if m.id == mid]
     return ordered
 
