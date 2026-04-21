@@ -57,7 +57,7 @@ cd ~/your-project
 loci index
 ```
 
-This walks the directory, chunks all source files (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.tsx`, `.jsx`, `.rb`, `.cpp`, `.c`, `.h`), and stores them with vector embeddings. Duplicates (cosine similarity ≥ 0.95) are skipped automatically.
+This walks the directory, chunks all source files (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.tsx`, `.jsx`, `.rb`, `.cpp`, `.c`, `.h`), and stores them with vector embeddings. Duplicates (similarity score ≥ 0.95) are skipped automatically. Files larger than 1 MB are skipped to avoid indexing generated bundles.
 
 **Incremental indexing** — by default, `loci index` skips files whose modification time hasn't changed since they were last indexed. Re-runs are fast and safe to call frequently. Use `--force` to reindex everything:
 
@@ -182,10 +182,11 @@ When Claude Code is connected via MCP, these tools are available in any conversa
 | Tool | Description |
 |------|-------------|
 | `remember(content, tags, project)` | Store a fact or note |
-| `recall(query, k)` | Retrieve the most relevant memories |
+| `recall(query, k, source, tags)` | Retrieve the most relevant memories (optionally filter by source type or tags) |
 | `forget(id)` | Delete a memory by ID |
 | `list_memories(tag, limit)` | List project memories, optionally filtered by tag |
 | `index_codebase(force)` | Index (or incrementally update) the current project codebase |
+| `find_files(query, k)` | Find project files by name or symbol via semantic search |
 | `add_ref(path)` | Add a cross-project reference |
 | `remove_ref(path)` | Remove a cross-project reference |
 | `list_refs()` | List all references from the current project |
@@ -206,9 +207,11 @@ Defaults set in `loci/config.py`:
 | Setting | Value |
 |---------|-------|
 | Embedding model | `BAAI/bge-small-en-v1.5` (384-dim, runs locally) |
-| Chunk size | 1024 characters |
+| Chunk size | 1024 characters (2048 for code), 200-char overlap |
+| Max file size | 1 MB (larger files skipped during indexing) |
 | Default results (`-k`) | 5 |
-| Dedup threshold | cosine similarity ≥ 0.95 |
+| Dedup threshold | score ≥ 0.95 (global), ≥ 0.99 (same project) |
+| Source boost | manual 1.5×, session 1.3×, others 1.0× |
 | Watch folder | `~/loci-docs` |
 
 ---

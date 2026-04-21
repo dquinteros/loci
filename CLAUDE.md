@@ -90,12 +90,12 @@ User/Claude Code
 | `loci/store.py` | CRUD, FTS5 index, sqlite-vec vector index, deduplication, batch insert, thread-local connection pool |
 | `loci/migrations/` | Numbered schema migrations (`0001_initial.py`, etc.) with version tracking in `_schema_version` table |
 | `loci/embedder.py` | Wraps FastEmbed (`BAAI/bge-small-en-v1.5`, 384-dim) — singleton model |
-| `loci/chunker.py` | Recursive character text splitter (default 1024 chars, code uses 2048) |
+| `loci/chunker.py` | Recursive character text splitter (default 1024 chars / 200-char overlap, code uses 2048) |
 | `loci/refs.py` | Cross-project reference graph: CRUD + BFS resolver for multi-project search |
 | `loci/retriever.py` | Hybrid search: vector ANN + FTS5 keyword, merged via reciprocal rank fusion |
 | `loci/mcp_server.py` | FastMCP server exposing `remember`, `recall`, `forget`, `list_memories`, `index_codebase`, `add_ref`, `remove_ref`, `list_refs`, `index_ref` tools |
 | `loci/cli.py` | Click CLI: all user-facing commands including `install`/`uninstall`, `ref` subgroup, `index-ref` |
-| `loci/config.py` | All constants (paths, thresholds, model name, extensions, `SKIP_DIRS`) |
+| `loci/config.py` | All constants (paths, thresholds, boosts, model name, extensions, `SKIP_DIRS`, `MAX_FILE_SIZE`) |
 | `loci/ingest/` | Source-specific ingestion: `code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py` |
 | `loci/hooks/` | Hook scripts bundled inside the package; `loci install` copies them to `~/.loci/hooks/` |
 
@@ -105,8 +105,8 @@ User/Claude Code
 
 Hook scripts:
 
-- `session_start.py` — runs at session start, injects top-5 project memories as `<loci-context>` into stdin; cross-project memories are prefixed with `[ref:project-name]`
-- `post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory
+- `session_start.py` — runs at session start; fires 3 category-targeted queries (session summaries, manual facts, code) with source filtering, deduplicates, and injects top-5 as `<loci-context>`. Cross-project memories are prefixed with `[ref:project-name]`.
+- `post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory. Skips files under `~/.loci/` to avoid indexing deployed hooks.
 - `session_stop.py` — reads `LOCI_SESSION_SUMMARY` env var or stdin; saves each line (>20 chars) as a "session"-tagged memory
 
 ### Storage Schema
@@ -116,6 +116,10 @@ Single SQLite DB at `~/.loci/memories.db` (overridable via `LOCI_DB_PATH`):
 - `memories_fts` — FTS5 virtual table, auto-synced via triggers
 - `memories_vec` — sqlite-vec virtual table for ANN (float32[384])
 - `project_refs` — directed graph of cross-project references (`src_project -> dst_project`)
+- `file_index` — per-file metadata (content_hash, symbols, line_count) for two-tier search
+- `file_index_vec` — file-level embeddings for semantic file search
+- `_schema_version` — tracks applied migration versions
+- `_metadata` — key-value store (currently tracks `embed_model` for version compatibility)
 
 ### Cross-Project References
 
@@ -129,8 +133,10 @@ MCP tools: `add_ref`, `remove_ref`, `list_refs`, `index_ref`.
 - **Batch insert:** `store.insert_batch()` accepts a list of `ChunkInput` and: (1) embeds all texts in one `embed()` call, (2) fetches all existing vectors and computes a similarity matrix for dedup (falls back to per-chunk ANN if >100K existing vectors), (3) performs intra-batch dedup, (4) inserts all non-duplicate chunks in a single transaction. All ingest callers (`code.py`, `pdf.py`, `docx.py`, `web.py`, `watcher.py`, `cli.py import`) use `insert_batch()`. The original `insert()` is kept for single-item callers (MCP `remember`, CLI `add`, hooks).
 - **Deduplication threshold:** score ≥ 0.95 skips storing duplicate chunks (`store.py`). The dedup metric is `1 - L2_distance`, matching `vector_search()` scoring. Per-project dedup uses a stricter 0.99 threshold to reduce false positives within the same project.
 - **Project scoping:** memories are keyed to the git repo root (or CWD), so `recall` only returns relevant project context by default. Cross-project references extend this to include referenced projects with a 0.7× RRF weight penalty.
-- **Hybrid retrieval:** RRF merges vector and keyword rankings using `1/(rank+60)` — neither alone is used; both contribute
-- **Embedding model is a singleton:** loaded once in `embedder.py`, shared across the process to avoid reload overhead
+- **Hybrid retrieval:** RRF merges vector and keyword rankings using `1/(rank+60)` — neither alone is used; both contribute. Source boost (manual 1.5×, session 1.3×) and exponential recency decay are applied after RRF. Both `vector_search` and `fts_search` support `source` and `tags` filtering at the SQL level.
+- **Embedding model is a singleton:** loaded once in `embedder.py`, shared across the process to avoid reload overhead. Model version is tracked in `_metadata` table; a mismatch warns on stderr and suggests reindexing.
+- **File size cap:** files exceeding `MAX_FILE_SIZE` (1MB) are skipped during indexing to avoid wasting time on generated/bundled files.
+- **Chunk overlap:** adjacent chunks share 200 characters of overlap (`CHUNK_OVERLAP`) so functions or paragraphs straddling a boundary retain context in both chunks.
 - **Incremental indexing:** `ingest_codebase()` compares `st_mtime` against `MAX(created_at)` per file; unchanged files are skipped. `--force` / `force=True` bypasses this and replaces all chunks.
 - **Stale/delete pattern:** before reindexing a file, old chunks are marked `is_stale=True`; after new chunks are inserted, stale entries are deleted. This keeps the DB consistent if indexing is interrupted.
 - **Directory pruning:** `ingest/code.py` uses `os.walk` (not `rglob`) with in-place `dirnames` pruning. Directories in `config.SKIP_DIRS` (e.g. `node_modules`, `venv`, `__pycache__`, `build`, `dist`) and hidden directories are never descended into, avoiding expensive enumeration of large dependency trees.
