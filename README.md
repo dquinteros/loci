@@ -15,9 +15,10 @@
 
 Every session, loci automatically:
 
-1. **Injects context** — top memories relevant to your project are surfaced at session start
-2. **Captures edits** — file changes made by Claude are stored as code memories in real time
-3. **Saves summaries** — a summary of what was done is written when the session ends
+1. **Injects context at session start** — top memories relevant to your project are surfaced from session summaries, manual facts, and code
+2. **Enriches every prompt** — each user prompt triggers a semantic search, injecting the most relevant memories before Claude processes it
+3. **Captures edits** — file changes made by Claude are stored as code memories in real time
+4. **Saves summaries** — a summary of what was done is written when the session ends
 
 Memory lives in a local SQLite database (`~/.loci/memories.db`) and never leaves your machine. Search uses a hybrid of vector embeddings and full-text search (reciprocal rank fusion) so results are fast and relevant.
 
@@ -42,7 +43,7 @@ Restart Claude Code after installing.
 
 `loci install` writes to `~/.claude/settings.json` — it registers:
 - An MCP server (`loci serve`) so Claude can call memory tools directly
-- Three hooks: `SessionStart`, `PostToolUse`, and `Stop`
+- Four hooks: `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`
 
 Restart Claude Code after installing.
 
@@ -221,9 +222,10 @@ Defaults set in `loci/config.py`:
 ```
 Claude Code session
        │
-       ├── SessionStart hook ──► inject top-5 relevant memories as <loci-context>
-       ├── PostToolUse hook  ──► store edited files as code memories
-       └── Stop hook         ──► save session summary as memories
+       ├── SessionStart hook      ──► inject top-5 relevant memories as <loci-context>
+       ├── UserPromptSubmit hook ──► enrich each prompt with up to 3 relevant memories
+       ├── PostToolUse hook      ──► store edited files as code memories
+       └── Stop hook             ──► save session summary as memories
        │
        └── MCP tools (remember / recall / forget / list_memories)
                   │

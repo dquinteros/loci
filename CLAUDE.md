@@ -108,6 +108,7 @@ Hook scripts:
 - `session_start.py` — runs at session start; fires 3 category-targeted queries (session summaries, manual facts, code) with source filtering, deduplicates, and injects top-5 as `<loci-context>`. Cross-project memories are prefixed with `[ref:project-name]`.
 - `post_tool_use.py` — reads `CLAUDE_HOOK_PAYLOAD` env var (JSON with `tool_name`, `tool_input`); fires on Write/Edit/NotebookEdit to store the changed file as a code memory. Skips files under `~/.loci/` to avoid indexing deployed hooks.
 - `session_stop.py` — reads `LOCI_SESSION_SUMMARY` env var or stdin; saves each line (>20 chars) as a "session"-tagged memory
+- `user_prompt_submit.py` — runs on every user prompt; uses the prompt text as a semantic search query to inject up to 3 relevant memories (2K char budget). Skips trivial prompts (short, slash commands, confirmations like "yes"/"ok"/"lgtm") to avoid unnecessary latency.
 
 ### Storage Schema
 

@@ -220,6 +220,7 @@ LOCI_HOOKS = {
     "SessionStart": "session_start.py",
     "Stop": "session_stop.py",
     "PostToolUse": "post_tool_use.py",
+    "UserPromptSubmit": "user_prompt_submit.py",
 }
 
 
